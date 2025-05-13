@@ -41,20 +41,6 @@ sudo ./allow-cn-inbound.sh
 sudo ./allow-cn-inbound.sh uninstall
 ``` 
 
-⸻
-
-⚙️ 工作机制说明
-	1.	下载中国 IPv4 列表，优先使用：
-	•	ipdeny.com
-	•	如失败则使用 APNIC 备用源
-	2.	加载所有中国 IP 到 ipset 集合 cnlist
-	3.	设置 iptables 入站策略：
-	•	放行本地回环和 ICMP
-	•	放行 ESTABLISHED, RELATED 已建立连接
-	•	放行所有 cnlist 中的来源 IP
-	•	丢弃所有其他入站连接（默认 DROP）
-
-⸻
 
 📂 配置文件路径
 	•	ipset 规则文件：/etc/ipset/ipset.conf
