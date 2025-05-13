@@ -8,12 +8,19 @@ CNinOnlyBlocker
 
 📦 功能特点
 	•	✅ 仅允许中国 IP 入站连接（如 SSH、HTTP、HTTPS）
+ 
 	•	❌ 阻止所有非中国 IP 的入站访问
+ 
 	•	✅ 出站流量不做限制
+ 
 	•	⚡ 使用 ipset 实现高速 IP 匹配
+ 
 	•	💾 自动保存防火墙规则
+ 
 	•	🔁 开机自动还原（基于 systemd 服务）
+ 
 	•	🧹 一键卸载，恢复原始防火墙状态
+ 
 
 ⸻
 
@@ -27,9 +34,13 @@ sudo ./allow-cn-inbound.sh
 
 运行后，将自动完成以下步骤：
 	•	下载中国 IP 列表
+ 
 	•	创建 ipset 集合并填充
+ 
 	•	配置 iptables 规则
+ 
 	•	保存并启用 systemd 自动还原服务
+ 
 
 ⸻
 
@@ -44,15 +55,21 @@ sudo ./allow-cn-inbound.sh uninstall
 
 📂 配置文件路径
 	•	ipset 规则文件：/etc/ipset/ipset.conf
+ 
 	•	iptables 规则文件：/etc/iptables/rules.v4
+ 
 	•	systemd 服务文件：/etc/systemd/system/ipset-restore.service
+ 
 
 ⸻
 
 🔧 系统要求
 	•	Linux 系统（推荐 Debian/Ubuntu）
+ 
 	•	Root 管理权限
+ 
 	•	已安装或自动安装以下工具：ipset、iptables、curl、wget
+ 
 
 ⸻
 
