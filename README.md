@@ -19,9 +19,11 @@ CNinOnlyBlocker
 
 🚀 使用方法
 
+ ```
 curl -O https://raw.githubusercontent.com/Cd1s/CNinOnlyBlocker/refs/heads/main/allow-cn-inbound.sh
 chmod +x allow-cn-inbound.sh
 sudo ./allow-cn-inbound.sh
+``` 
 
 运行后，将自动完成以下步骤：
 	•	下载中国 IP 列表
@@ -35,8 +37,9 @@ sudo ./allow-cn-inbound.sh
 
 若需还原所有规则并卸载服务，请执行：
 
+``` 
 sudo ./allow-cn-inbound.sh uninstall
-
+``` 
 
 ⸻
 
