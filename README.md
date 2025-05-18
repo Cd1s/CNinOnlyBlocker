@@ -96,4 +96,17 @@ sudo ./allow-cn-inbound.sh uninstall
 
 ---
 
-如果你有更复杂的场景需求，也欢迎提交 PR 或 issue！
+## 🌐 数据源说明（已更新）
+
+**IPv4 主源：**  
+`https://www.ipdeny.com/ipblocks/data/aggregated/cn-aggregated.zone`
+
+**IPv6 主源（已更新为）：**  
+`https://www.ipdeny.com/ipv6/ipaddresses/blocks/cn.zone`
+
+**备用源（IPv4/IPv6）：**  
+`http://ftp.apnic.net/apnic/stats/apnic/delegated-apnic-latest`
+
+---
+
+如需进一步定制或有其他需求，欢迎提出！
