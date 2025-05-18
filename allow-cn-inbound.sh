@@ -18,13 +18,21 @@ fi
 # 函数：检查依赖
 check_dependencies() {
     echo -e "${BLUE}检查依赖...${NC}"
-    for pkg in ipset iptables ip6tables curl wget; do
+    for pkg in ipset iptables curl wget; do
         if ! command -v $pkg &>/dev/null; then
             echo -e "${YELLOW}安装缺失的依赖：$pkg${NC}"
             apt update -qq
             apt install -y $pkg
         fi
     done
+    
+    # 检查ip6tables
+    if ! command -v ip6tables &>/dev/null; then
+        echo -e "${YELLOW}安装缺失的依赖：ip6tables${NC}"
+        apt update -qq
+        apt install -y ip6tables || apt install -y iptables
+    fi
+    
     echo -e "${GREEN}依赖检查完成${NC}"
 }
 
@@ -279,18 +287,18 @@ delete_allowed_port() {
     # 从配置文件中删除
     sed -i "/^$port$/d" /etc/cnblocker/allowed_ports.conf
     
-    # 应用到防火墙规则
+    # 应用到防火墙规则 - 使用检查规则是否存在再删除的方式
     if ipset list cnipv4 &>/dev/null; then
         echo -e "${BLUE}从IPv4防火墙移除...${NC}"
-        iptables -D INPUT -p tcp --dport $port -j ACCEPT
-        iptables -D INPUT -p udp --dport $port -j ACCEPT
+        iptables -C INPUT -p tcp --dport $port -j ACCEPT 2>/dev/null && iptables -D INPUT -p tcp --dport $port -j ACCEPT
+        iptables -C INPUT -p udp --dport $port -j ACCEPT 2>/dev/null && iptables -D INPUT -p udp --dport $port -j ACCEPT
         iptables-save > /etc/iptables/rules.v4
     fi
     
     if ipset list cnipv6 &>/dev/null; then
         echo -e "${BLUE}从IPv6防火墙移除...${NC}"
-        ip6tables -D INPUT -p tcp --dport $port -j ACCEPT
-        ip6tables -D INPUT -p udp --dport $port -j ACCEPT
+        ip6tables -C INPUT -p tcp --dport $port -j ACCEPT 2>/dev/null && ip6tables -D INPUT -p tcp --dport $port -j ACCEPT
+        ip6tables -C INPUT -p udp --dport $port -j ACCEPT 2>/dev/null && ip6tables -D INPUT -p udp --dport $port -j ACCEPT
         ip6tables-save > /etc/iptables/rules.v6
     fi
     
