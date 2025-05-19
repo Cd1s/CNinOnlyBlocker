@@ -53,8 +53,8 @@ check_root() {
 
 # 函数：检查IPv6支持
 check_ipv6_support() {
-    # 强制返回false，禁用IPv6支持
-    return 1
+    # 强制返回true，始终启用IPv6支持
+    return 0
     
     # 原始代码注释掉但保留，以便将来需要时可以恢复
     # if [ -f /proc/net/if_inet6 ]; then
@@ -162,15 +162,13 @@ check_dependencies() {
     esac
     
     # 检查ip6tables
-    if check_ipv6_support; then
-        if ! command -v ip6tables &>/dev/null; then
-            echo -e "${YELLOW}安装缺失的依赖：ip6tables${NC}"
-            case $PKG_MANAGER in
-                apt) apt install -y ip6tables || apt install -y iptables ;;
-                yum) yum install -y ip6tables ;;
-                apk) apk add ip6tables ;;
-            esac
-        fi
+    if ! command -v ip6tables &>/dev/null; then
+        echo -e "${YELLOW}安装缺失的依赖：ip6tables${NC}"
+        case $PKG_MANAGER in
+            apt) apt install -y ip6tables || apt install -y iptables ;;
+            yum) yum install -y ip6tables ;;
+            apk) apk add ip6tables ;;
+        esac
     fi
     
     echo -e "${GREEN}依赖检查完成${NC}"
@@ -302,11 +300,6 @@ configure_ipv4_firewall() {
 
 # 函数：配置IPv6防火墙
 configure_ipv6_firewall() {
-    if ! check_ipv6_support; then
-        echo -e "${YELLOW}系统不支持IPv6或未启用IPv6，跳过IPv6配置${NC}"
-        return 0
-    fi
-    
     echo -e "${BLUE}📦 创建并填充 ipset 集合 (IPv6)...${NC}"
     ipset destroy cnipv6 2>/dev/null || true
     ipset create cnipv6 hash:net family inet6 hashsize 4096 maxelem 65536
@@ -393,7 +386,7 @@ EOF
             cat > /etc/systemd/system/ipset-restore-ipv6.service <<EOF
 [Unit]
 Description=Restore ipset and iptables IPv6 rules
-After=network.target network-online.target sys-subsystem-net-devices-eth0.device
+After=network.target network-online.target
 Wants=network-online.target
 
 [Service]
@@ -415,10 +408,6 @@ EOF
 EOF
             chmod 644 /etc/cron.d/restore-ipv6-rules
 
-            systemctl daemon-reload
-            systemctl enable ipset-restore-ipv4.service
-            systemctl enable ipset-restore-ipv6.service
-            
             # 创建一个新的启动脚本作为额外备份
             cat > /etc/init.d/restore-ipv6-rules <<EOF
 #!/bin/sh
@@ -457,6 +446,10 @@ EOF
             elif command -v chkconfig >/dev/null 2>&1; then
                 chkconfig --add restore-ipv6-rules
             fi
+
+            systemctl daemon-reload
+            systemctl enable ipset-restore-ipv4.service
+            systemctl enable ipset-restore-ipv6.service
             ;;
         rc-update)
             # Alpine Linux处理
@@ -541,6 +534,14 @@ uninstall_all() {
             systemctl disable ipset-restore-ipv6.service 2>/dev/null
             rm -f /etc/systemd/system/ipset-restore-ipv4.service
             rm -f /etc/systemd/system/ipset-restore-ipv6.service
+            # 删除cron任务和init.d脚本
+            rm -f /etc/cron.d/restore-ipv6-rules
+            rm -f /etc/init.d/restore-ipv6-rules
+            if command -v update-rc.d >/dev/null 2>&1; then
+                update-rc.d restore-ipv6-rules remove 2>/dev/null || true
+            elif command -v chkconfig >/dev/null 2>&1; then
+                chkconfig --del restore-ipv6-rules 2>/dev/null || true
+            fi
             systemctl daemon-reload
             ;;
         rc-update)
@@ -753,17 +754,21 @@ check_service_status() {
             systemctl status ipset-restore-ipv6.service
             ;;
         rc-update)
-            rc-status | grep ipset-restore
+            rc-status | grep local
             ;;
     esac
     
     # 检查规则是否已加载
     if ipset list cnipv4 &>/dev/null; then
         echo -e "${GREEN}IPv4规则已加载${NC}"
+    else
+        echo -e "${RED}IPv4规则未加载${NC}"
     fi
     
     if ipset list cnipv6 &>/dev/null; then
         echo -e "${GREEN}IPv6规则已加载${NC}"
+    else
+        echo -e "${RED}IPv6规则未加载${NC}"
     fi
 }
 
@@ -845,11 +850,6 @@ main() {
                 read -p "按Enter键继续..."
                 ;;
             2)
-                if ! check_ipv6_support; then
-                    echo -e "${RED}系统不支持IPv6，跳过安装${NC}"
-                    read -p "按Enter键继续..."
-                    continue
-                fi
                 check_dependencies
                 download_cn_ipv6_list && configure_ipv6_firewall
                 setup_systemd_service
