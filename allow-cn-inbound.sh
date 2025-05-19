@@ -640,6 +640,24 @@ test_port_connectivity() {
         return
     fi
     
+    # 检查是否安装了nc
+    if ! command -v nc &>/dev/null; then
+        echo -e "${YELLOW}未安装netcat，无法进行端口测试${NC}"
+        echo -e "${BLUE}可以使用以下命令安装：${NC}"
+        case $PKG_MANAGER in
+            apt)
+                echo -e "${BLUE}apt install -y netcat${NC}"
+                ;;
+            yum)
+                echo -e "${BLUE}yum install -y nc${NC}"
+                ;;
+            apk)
+                echo -e "${BLUE}apk add netcat-openbsd${NC}"
+                ;;
+        esac
+        return
+    fi
+    
     echo -e "${BLUE}测试端口连通性...${NC}"
     while read port; do
         if [[ "$port" =~ ^[0-9]+$ ]]; then
