@@ -686,7 +686,7 @@ show_menu() {
     echo -e "${YELLOW}8.${NC} 删除并卸载，放行全部端口"
     echo -e "${YELLOW}9.${NC} 验证防火墙规则"
     echo -e "${YELLOW}10.${NC} 检查服务状态"
-    echo -e "${YELLOW}11.${NC} 测试端口连通性"
+    echo -e "${YELLOW}11.${NC} 测试放行端口是否监听"
     echo -e "${YELLOW}0.${NC} 退出"
     echo -e "${BLUE}=================================================${NC}"
     echo -e "请输入选项 [0-11]: "
