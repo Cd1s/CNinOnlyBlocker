@@ -368,19 +368,35 @@ setup_systemd_service() {
     
     case $SERVICE_MANAGER in
         systemctl)
-            cat > /etc/systemd/system/ipset-restore.service <<EOF
+            # IPv4规则恢复服务
+            cat > /etc/systemd/system/ipset-restore-ipv4.service <<EOF
 [Unit]
-Description=Restore ipset and iptables rules
+Description=Restore ipset and iptables IPv4 rules
 Before=network-pre.target
-After=local-fs.target network.target
+After=local-fs.target
 
 [Service]
 Type=oneshot
-ExecStartPre=/bin/sleep 2
-ExecStart=/bin/bash -c "modprobe ip6_tables || true"
-ExecStart=/bin/bash -c "modprobe ip6table_filter || true"
 ExecStart=/bin/bash -c "ipset restore < /etc/ipset/ipset_v4.conf || true"
 ExecStart=/bin/bash -c "iptables-restore < /etc/iptables/rules.v4 || true"
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+            # IPv6规则恢复服务 - 在网络完全启动后运行
+            cat > /etc/systemd/system/ipset-restore-ipv6.service <<EOF
+[Unit]
+Description=Restore ipset and iptables IPv6 rules
+After=network.target network-online.target sys-subsystem-net-devices-eth0.device
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStartPre=/bin/sleep 5
+ExecStart=/bin/bash -c "modprobe ip6_tables || true"
+ExecStart=/bin/bash -c "modprobe ip6table_filter || true"
 ExecStart=/bin/bash -c "ipset restore < /etc/ipset/ipset_v6.conf || true" 
 ExecStart=/bin/bash -c "ip6tables-restore < /etc/iptables/rules.v6 || true"
 RemainAfterExit=yes
@@ -389,24 +405,98 @@ RemainAfterExit=yes
 WantedBy=multi-user.target
 EOF
 
+            # 创建一个cron任务脚本作为额外保障
+            cat > /etc/cron.d/restore-ipv6-rules <<EOF
+@reboot root sleep 60 && modprobe ip6_tables && ipset restore < /etc/ipset/ipset_v6.conf || true && ip6tables-restore < /etc/iptables/rules.v6 || true
+EOF
+            chmod 644 /etc/cron.d/restore-ipv6-rules
+
             systemctl daemon-reload
-            systemctl enable ipset-restore.service
+            systemctl enable ipset-restore-ipv4.service
+            systemctl enable ipset-restore-ipv6.service
+            
+            # 创建一个新的启动脚本作为额外备份
+            cat > /etc/init.d/restore-ipv6-rules <<EOF
+#!/bin/sh
+### BEGIN INIT INFO
+# Provides:          restore-ipv6-rules
+# Required-Start:    \$network \$remote_fs \$syslog
+# Required-Stop:     \$network \$remote_fs \$syslog
+# Default-Start:     2 3 4 5
+# Default-Stop:      0 1 6
+# Short-Description: Restore IPv6 firewall rules
+# Description:       Restore IPv6 firewall rules after network is fully up
+### END INIT INFO
+
+case "\$1" in
+  start)
+    echo "Loading IPv6 firewall rules"
+    sleep 15
+    modprobe ip6_tables || true
+    modprobe ip6table_filter || true
+    ipset restore < /etc/ipset/ipset_v6.conf || true
+    ip6tables-restore < /etc/iptables/rules.v6 || true
+    ;;
+  stop|restart|reload|force-reload)
+    # Nothing to do
+    ;;
+  *)
+    echo "Usage: \$0 start|stop" >&2
+    exit 3
+    ;;
+esac
+exit 0
+EOF
+            chmod +x /etc/init.d/restore-ipv6-rules
+            if command -v update-rc.d >/dev/null 2>&1; then
+                update-rc.d restore-ipv6-rules defaults
+            elif command -v chkconfig >/dev/null 2>&1; then
+                chkconfig --add restore-ipv6-rules
+            fi
             ;;
         rc-update)
-            cat > /etc/local.d/ipset-restore.start <<EOF
+            # Alpine Linux处理
+            cat > /etc/local.d/ipset-restore-ipv4.start <<EOF
 #!/bin/sh
+# 恢复IPv4规则
+ipset restore < /etc/ipset/ipset_v4.conf || true
+iptables-restore < /etc/iptables/rules.v4 || true
+EOF
+            chmod +x /etc/local.d/ipset-restore-ipv4.start
+            
+            # 创建一个延迟的IPv6恢复启动脚本
+            cat > /etc/local.d/ipset-restore-ipv6.start <<EOF
+#!/bin/sh
+# 等待网络完全启动
+sleep 15
 # 确保必要的内核模块已加载
 modprobe ip6_tables || true
 modprobe ip6table_filter || true
-# 先恢复IPv4规则
-ipset restore < /etc/ipset/ipset_v4.conf || true
-iptables-restore < /etc/iptables/rules.v4 || true
-# 等待一下再恢复IPv6规则
-sleep 2
+# 恢复IPv6规则
 ipset restore < /etc/ipset/ipset_v6.conf || true
 ip6tables-restore < /etc/iptables/rules.v6 || true
 EOF
-            chmod +x /etc/local.d/ipset-restore.start
+            chmod +x /etc/local.d/ipset-restore-ipv6.start
+            
+            # 设置在后台循环检查和恢复IPv6规则的脚本
+            cat > /etc/local.d/check-ipv6-rules.start <<EOF
+#!/bin/sh
+(
+  # 等待系统完全启动
+  sleep 30
+  
+  # 检查IPv6规则是否加载，如果没有则重新加载
+  if ! ip6tables -L INPUT -n | grep -q "match-set cnipv6"; then
+    echo "IPv6 rules not found, restoring..."
+    modprobe ip6_tables || true
+    modprobe ip6table_filter || true
+    ipset restore < /etc/ipset/ipset_v6.conf || true
+    ip6tables-restore < /etc/iptables/rules.v6 || true
+  fi
+) &
+EOF
+            chmod +x /etc/local.d/check-ipv6-rules.start
+            
             rc-update add local default
             ;;
     esac
@@ -443,13 +533,17 @@ uninstall_all() {
     
     case $SERVICE_MANAGER in
         systemctl)
-            systemctl disable ipset-restore.service 2>/dev/null
-            rm -f /etc/systemd/system/ipset-restore.service
+            systemctl disable ipset-restore-ipv4.service 2>/dev/null
+            systemctl disable ipset-restore-ipv6.service 2>/dev/null
+            rm -f /etc/systemd/system/ipset-restore-ipv4.service
+            rm -f /etc/systemd/system/ipset-restore-ipv6.service
             systemctl daemon-reload
             ;;
         rc-update)
             rc-update del local default 2>/dev/null
-            rm -f /etc/local.d/ipset-restore.start
+            rm -f /etc/local.d/ipset-restore-ipv4.start
+            rm -f /etc/local.d/ipset-restore-ipv6.start
+            rm -f /etc/local.d/check-ipv6-rules.start
             ;;
     esac
     
@@ -604,12 +698,38 @@ verify_firewall_rules() {
     if ipset list cnipv4 &>/dev/null; then
         echo -e "${GREEN}IPv4规则状态:${NC}"
         iptables -L INPUT -n -v | grep -E "ACCEPT|DROP"
+    else
+        echo -e "${RED}未发现IPv4规则，请尝试重新安装${NC}"
     fi
     
     # 检查IPv6规则
     if ipset list cnipv6 &>/dev/null; then
         echo -e "${GREEN}IPv6规则状态:${NC}"
         ip6tables -L INPUT -n -v | grep -E "ACCEPT|DROP"
+    else
+        echo -e "${RED}未发现IPv6规则，请尝试重新安装${NC}"
+        
+        echo -e "${YELLOW}尝试手动恢复IPv6规则...${NC}"
+        echo -e "${BLUE}这可能需要一些时间，请稍候...${NC}"
+        
+        # 尝试手动恢复IPv6规则
+        modprobe ip6_tables 2>/dev/null
+        modprobe ip6table_filter 2>/dev/null
+        
+        if [ -f /etc/ipset/ipset_v6.conf ] && [ -f /etc/iptables/rules.v6 ]; then
+            ipset restore < /etc/ipset/ipset_v6.conf 2>/dev/null
+            ip6tables-restore < /etc/iptables/rules.v6 2>/dev/null
+            
+            # 再次检查是否成功
+            if ipset list cnipv6 &>/dev/null; then
+                echo -e "${GREEN}成功手动恢复IPv6规则！${NC}"
+                ip6tables -L INPUT -n -v | grep -E "ACCEPT|DROP"
+            else
+                echo -e "${RED}无法手动恢复IPv6规则，请检查系统IPv6支持${NC}"
+            fi
+        else
+            echo -e "${RED}缺少IPv6规则配置文件，请先安装IPv6规则${NC}"
+        fi
     fi
     
     # 检查端口规则
@@ -625,7 +745,8 @@ check_service_status() {
     
     case $SERVICE_MANAGER in
         systemctl)
-            systemctl status ipset-restore.service
+            systemctl status ipset-restore-ipv4.service
+            systemctl status ipset-restore-ipv6.service
             ;;
         rc-update)
             rc-status | grep ipset-restore
