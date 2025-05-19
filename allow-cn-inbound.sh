@@ -524,14 +524,17 @@ verify_firewall_rules() {
     echo -e "\n${YELLOW}IPv6 防火墙规则:${NC}"
     ip6tables -L INPUT -v -n
     
+    echo -e "\n${YELLOW}当前使用的 IP 集合:${NC}"
+    ipset list -n
+    
     if [ -f "$CONFIG_DIR/ipv4_enabled" ]; then
-        echo -e "\n${YELLOW}IPv4 中国 IP 集合:${NC}"
-        ipset list $IPV4_IPSET_NAME
+        echo -e "\n${YELLOW}IPv4 中国 IP 集合信息:${NC}"
+        ipset list $IPV4_IPSET_NAME -t
     fi
     
     if [ -f "$CONFIG_DIR/ipv6_enabled" ]; then
-        echo -e "\n${YELLOW}IPv6 中国 IP 集合:${NC}"
-        ipset list $IPV6_IPSET_NAME
+        echo -e "\n${YELLOW}IPv6 中国 IP 集合信息:${NC}"
+        ipset list $IPV6_IPSET_NAME -t
     fi
 }
 
