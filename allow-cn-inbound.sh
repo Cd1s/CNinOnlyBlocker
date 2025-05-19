@@ -215,7 +215,7 @@ download_cn_ipv6_list() {
 # 函数：配置IPv4防火墙
 configure_ipv4_firewall() {
     echo -e "${BLUE}📦 创建并填充 ipset 集合 (IPv4)...${NC}"
-    ipset destroy cnipv4 2>/dev/null || true
+    ipset destroy cnipv4 2>/dev/null || true # 脚本执行时先销毁，避免后续 ipset-restore 服务启动时首次冲突
     ipset create cnipv4 hash:net family inet maxelem 1000000 # Increased maxelem for potentially large lists
     # Use -exist to avoid errors if an entry already exists (though destroy should handle this)
     while IFS= read -r ip; do
@@ -262,7 +262,7 @@ configure_ipv6_firewall() {
         return 1
     fi
     echo -e "${BLUE}📦 创建并填充 ipset 集合 (IPv6)...${NC}"
-    ipset destroy cnipv6 2>/dev/null || true
+    ipset destroy cnipv6 2>/dev/null || true # 脚本执行时先销毁
     ipset create cnipv6 hash:net family inet6 maxelem 1000000
     while IFS= read -r ip; do
         ipset add cnipv6 "$ip" -exist
@@ -340,52 +340,144 @@ setup_systemd_service() {
     fi
 
     echo -e "${BLUE}创建包装脚本: $WRAPPER_SCRIPT_PATH ${NC}"
-    # 创建包装脚本内容
+    # 创建包装脚本内容 (已修正，会先销毁已存在的同名ipset)
     cat > "$WRAPPER_SCRIPT_PATH" <<EOF_WRAPPER
 #!/bin/sh
 # CNBlocker Rule Restore Wrapper Script
 # This script is called by $SYSTEMD_SERVICE_NAME
 
-# Exit immediately if a command exits with a non-zero status.
-set -e
+# Ensure commands are found
+export PATH=/usr/sbin:/sbin:/usr/bin:/bin
+
+# Define ipset names (these should match what configure_firewall functions use)
+# 主脚本中 configure_ipv4_firewall 使用 "cnipv4"
+# 主脚本中 configure_ipv6_firewall 使用 "cnipv6"
+IPSET_NAME_V4="cnipv4"
+IPSET_NAME_V6="cnipv6"
 
 log_message() {
-    echo "CNBlocker Wrapper: \$1" >&2 # Log to stderr, systemd will capture to journal
+    # Echo to stdout, systemd journal will capture it with timestamp
+    # \$1: level (INFO, ERROR, WARNING), \$2...: message
+    local level="\$1"
+    shift
+    echo "CNBlocker Wrapper: [\$level] \$*"
 }
 
-log_message "开始恢复规则..."
+log_message "INFO" "Starting CNBlocker rule restoration process..."
 
-# IPv4 规则恢复 (关键)
+# --- Restore IPv4 rules (Critical) ---
+# Enable exit on error for this critical part
+set -e
+
+log_message "INFO" "Processing IPv4 ipset rules..."
+# The variables like $IPSET_V4_CONF are expanded by the main script when this heredoc is created.
 if [ ! -f "$IPSET_V4_CONF" ]; then
-    log_message "错误: IPv4 ipset 配置文件 $IPSET_V4_CONF 未找到!"
+    log_message "ERROR" "Critical - IPv4 ipset configuration file '$IPSET_V4_CONF' not found. Cannot restore."
     exit 1
 fi
-log_message "正在从 $IPSET_V4_CONF 恢复 IPv4 ipset..."
-/usr/sbin/ipset restore -f "$IPSET_V4_CONF"
 
+# Check if the ipset set already exists and destroy it to prevent "set already exists" error
+# Need to use \$IPSET_NAME_V4 so it's interpreted by the wrapper script's shell
+if ipset list -n "\$IPSET_NAME_V4" > /dev/null 2>&1; then
+    log_message "INFO" "IPv4 ipset '\$IPSET_NAME_V4' already exists in memory. Destroying it before restore."
+    if ipset destroy "\$IPSET_NAME_V4"; then
+        log_message "INFO" "Successfully destroyed existing IPv4 ipset '\$IPSET_NAME_V4'."
+    else
+        # This might happen if the set is in use or other issues.
+        # ipset restore might still fail.
+        log_message "WARNING" "Failed to destroy existing IPv4 ipset '\$IPSET_NAME_V4'. Restore might still fail."
+    fi
+else
+    log_message "INFO" "IPv4 ipset '\$IPSET_NAME_V4' does not exist in memory. Proceeding with restore to create it."
+fi
+
+log_message "INFO" "Restoring IPv4 ipset rules from '$IPSET_V4_CONF' for set '\$IPSET_NAME_V4'..."
+if ! /usr/sbin/ipset restore -f "$IPSET_V4_CONF"; then
+    log_message "ERROR" "Critical - Failed to restore IPv4 ipset rules for '\$IPSET_NAME_V4' from '$IPSET_V4_CONF'."
+    exit 1
+fi
+log_message "INFO" "IPv4 ipset rules for '\$IPSET_NAME_V4' restored successfully."
+
+log_message "INFO" "Processing IPv4 iptables rules..."
 if [ ! -f "$IPTABLES_RULES_V4" ]; then
-    log_message "错误: IPv4 iptables 规则文件 $IPTABLES_RULES_V4 未找到!"
+    log_message "ERROR" "Critical - IPv4 iptables rules file '$IPTABLES_RULES_V4' not found. Cannot restore."
     exit 1
 fi
-log_message "正在从 $IPTABLES_RULES_V4 恢复 IPv4 iptables 规则..."
-/usr/sbin/iptables-restore -n "$IPTABLES_RULES_V4"
+log_message "INFO" "Restoring IPv4 iptables rules from '$IPTABLES_RULES_V4'..."
+if ! /usr/sbin/iptables-restore -n "$IPTABLES_RULES_V4"; then
+    log_message "ERROR" "Critical - Failed to restore IPv4 iptables rules from '$IPTABLES_RULES_V4'."
+    exit 1
+fi
+log_message "INFO" "IPv4 iptables rules restored successfully."
+log_message "INFO" "IPv4 rules restoration completed."
 
-# IPv6 规则恢复 (可选)
-if [ -f "$IPSET_V6_CONF" ]; then
-    log_message "正在从 $IPSET_V6_CONF 恢复 IPv6 ipset..."
-    /usr/sbin/ipset restore -f "$IPSET_V6_CONF" || log_message "警告: IPv6 ipset 恢复失败 (文件: $IPSET_V6_CONF)，继续..."
+# Disable exit on error for optional IPv6 part
+set +e
+
+# --- Restore IPv6 rules (Optional) ---
+V6_RESTORATION_ATTEMPTED=false
+V6_RESTORATION_SUCCESSFUL=true # Assume success unless a step fails
+
+if ! command -v ip6tables > /dev/null 2>&1; then
+    log_message "INFO" "ip6tables command not found. Skipping all IPv6 restoration."
 else
-    log_message "信息: IPv6 ipset 配置文件 $IPSET_V6_CONF 未找到，跳过。"
+    log_message "INFO" "Processing IPv6 ipset rules..."
+    # Check if IPv6 ipset configuration file exists
+    if [ -f "$IPSET_V6_CONF" ]; then
+        V6_RESTORATION_ATTEMPTED=true
+        # Check if the ipset set already exists and destroy it
+        if ipset list -n "\$IPSET_NAME_V6" > /dev/null 2>&1; then
+            log_message "INFO" "IPv6 ipset '\$IPSET_NAME_V6' already exists. Destroying it before restore."
+            if ipset destroy "\$IPSET_NAME_V6"; then
+                log_message "INFO" "Successfully destroyed existing IPv6 ipset '\$IPSET_NAME_V6'."
+            else
+                log_message "WARNING" "Failed to destroy existing IPv6 ipset '\$IPSET_NAME_V6'."
+            fi
+        else
+            log_message "INFO" "IPv6 ipset '\$IPSET_NAME_V6' does not exist. Proceeding with restore."
+        fi
+
+        log_message "INFO" "Restoring IPv6 ipset rules from '$IPSET_V6_CONF' for set '\$IPSET_NAME_V6'..."
+        if /usr/sbin/ipset restore -f "$IPSET_V6_CONF"; then
+            log_message "INFO" "IPv6 ipset rules for '\$IPSET_NAME_V6' restored successfully."
+        else
+            log_message "WARNING" "Failed to restore IPv6 ipset rules for '\$IPSET_NAME_V6' from '$IPSET_V6_CONF'. This is non-critical."
+            V6_RESTORATION_SUCCESSFUL=false
+        fi
+    else
+        # Only log if IPv6 ipset config was expected (e.g., if IPSET_V6_CONF was set)
+        if [ -n "$IPSET_V6_CONF" ]; then
+             log_message "INFO" "IPv6 ipset configuration file '$IPSET_V6_CONF' not found. Skipping IPv6 ipset restore."
+        else
+             log_message "INFO" "IPv6 ipset configuration not specified. Skipping IPv6 ipset restore."
+        fi
+    fi
+
+    log_message "INFO" "Processing IPv6 ip6tables rules..."
+    # Check if IPv6 iptables rules file exists
+    if [ -f "$IP6TABLES_RULES_V6" ]; then
+        V6_RESTORATION_ATTEMPTED=true
+        log_message "INFO" "Restoring IPv6 ip6tables rules from '$IP6TABLES_RULES_V6'..."
+        if /usr/sbin/ip6tables-restore -n "$IP6TABLES_RULES_V6"; then
+            log_message "INFO" "IPv6 ip6tables rules restored successfully."
+        else
+            log_message "WARNING" "Failed to restore IPv6 ip6tables rules from '$IP6TABLES_RULES_V6'. This is non-critical."
+            V6_RESTORATION_SUCCESSFUL=false
+        fi
+    else
+        if [ -n "$IP6TABLES_RULES_V6" ]; then
+            log_message "INFO" "IPv6 ip6tables rules file '$IP6TABLES_RULES_V6' not found. Skipping IPv6 ip6tables restore."
+        else
+            log_message "INFO" "IPv6 iptables rules not specified. Skipping IPv6 ip6tables restore."
+        fi
+    fi
+fi # end of ip6tables command check
+
+if [ "\$V6_RESTORATION_ATTEMPTED" = true ] && [ "\$V6_RESTORATION_SUCCESSFUL" = false ]; then
+    log_message "WARNING" "One or more optional IPv6 restoration steps failed. Please check logs."
 fi
 
-if [ -f "$IP6TABLES_RULES_V6" ]; then
-    log_message "正在从 $IP6TABLES_RULES_V6 恢复 IPv6 iptables 规则..."
-    /usr/sbin/ip6tables-restore -n "$IP6TABLES_RULES_V6" || log_message "警告: IPv6 iptables 规则恢复失败 (文件: $IP6TABLES_RULES_V6)，继续..."
-else
-    log_message "信息: IPv6 iptables 规则文件 $IP6TABLES_RULES_V6 未找到，跳过。"
-fi
-
-log_message "规则恢复成功完成。"
+log_message "INFO" "CNBlocker rule restoration process finished."
 exit 0
 EOF_WRAPPER
 
@@ -448,8 +540,16 @@ uninstall_ipv4() {
     ipset destroy cnipv4 2>/dev/null || true
     rm -f "$IPSET_V4_CONF"
     rm -f "$IPTABLES_RULES_V4"
-    iptables-save > "$IPTABLES_RULES_V4" # Save empty ruleset
-    echo -e "${GREEN}✅ 已卸载：IPv4规则已清除，默认策略为 ACCEPT。${NC}"
+    # Save empty ruleset to prevent systemd service from restoring old rules if not fully uninstalled
+    echo "*filter" > "$IPTABLES_RULES_V4"
+    echo ":INPUT ACCEPT [0:0]" >> "$IPTABLES_RULES_V4"
+    echo ":FORWARD ACCEPT [0:0]" >> "$IPTABLES_RULES_V4"
+    echo ":OUTPUT ACCEPT [0:0]" >> "$IPTABLES_RULES_V4"
+    echo "COMMIT" >> "$IPTABLES_RULES_V4"
+    # Clear ipset save file
+    echo "" > "$IPSET_V4_CONF"
+
+    echo -e "${GREEN}✅ 已卸载：IPv4规则已清除，默认策略为 ACCEPT。配置文件已清空。${NC}"
 }
 
 # 函数：卸载IPv6规则
@@ -465,8 +565,15 @@ uninstall_ipv6() {
     ipset destroy cnipv6 2>/dev/null || true
     rm -f "$IPSET_V6_CONF"
     rm -f "$IP6TABLES_RULES_V6"
-    ip6tables-save > "$IP6TABLES_RULES_V6" # Save empty ruleset
-    echo -e "${GREEN}✅ 已卸载：IPv6规则已清除，默认策略为 ACCEPT。${NC}"
+    # Save empty ruleset
+    echo "*filter" > "$IP6TABLES_RULES_V6"
+    echo ":INPUT ACCEPT [0:0]" >> "$IP6TABLES_RULES_V6"
+    echo ":FORWARD ACCEPT [0:0]" >> "$IP6TABLES_RULES_V6"
+    echo ":OUTPUT ACCEPT [0:0]" >> "$IP6TABLES_RULES_V6"
+    echo "COMMIT" >> "$IP6TABLES_RULES_V6"
+    # Clear ipset save file
+    echo "" > "$IPSET_V6_CONF"
+    echo -e "${GREEN}✅ 已卸载：IPv6规则已清除，默认策略为 ACCEPT。配置文件已清空。${NC}"
 }
 
 # 函数：完全卸载
@@ -504,32 +611,46 @@ apply_port_rule() {
 
     local proto
     for proto in tcp udp; do
-        local rule_args=""
+        local rule_args_base=""
         if [[ "$port_entry" == *":"* ]]; then # Port range
-            rule_args="-p $proto -m multiport --dports $port_entry -j $target_action"
+            rule_args_base="-p $proto -m multiport --dports $port_entry"
         else # Single port
-            rule_args="-p $proto --dport $port_entry -j $target_action"
+            rule_args_base="-p $proto --dport $port_entry"
         fi
+        local rule_args_full="$rule_args_base -j $target_action"
+
 
         if [[ "$operation" == "C" ]]; then
-            "$ipt_cmd" -C "$chain" $rule_args &>/dev/null
+            "$ipt_cmd" -C "$chain" $rule_args_full &>/dev/null
             return $? # Return status of check
-        else
+        elif [[ "$operation" == "D" ]]; then
             # For -D, check first to avoid error message if rule doesn't exist
-            if [[ "$operation" == "D" ]]; then
-                if "$ipt_cmd" -C "$chain" $rule_args &>/dev/null; then
-                    "$ipt_cmd" -D "$chain" $rule_args
-                fi
-            else # For -I (Insert)
-                # Insert rule at the position just before the final DROP rule for INPUT chain
-                # If no explicit DROP rule, insert at the top (default behavior of -I).
-                # This example inserts before generic DROP. More specific placement might be needed.
-                local final_drop_rule_num=$("$ipt_cmd" -L "$chain" --line-numbers | grep -E "DROP\s+all\s+--\s+\anywhere\s+\anywhere" | awk '{print $1}' | head -n 1)
-                if [[ -n "$final_drop_rule_num" && "$chain" == "INPUT" ]]; then
-                     "$ipt_cmd" -I "$chain" "$final_drop_rule_num" $rule_args
+            # Loop to delete multiple occurrences if any (though typically there's one)
+            while "$ipt_cmd" -C "$chain" $rule_args_full &>/dev/null; do
+                "$ipt_cmd" -D "$chain" $rule_args_full
+            done
+        elif [[ "$operation" == "I" ]]; then
+            # Insert rule at the position just before the final DROP rule for INPUT chain
+            # If no explicit DROP rule, insert at the top (default behavior of -I).
+            # This logic ensures allowed ports are evaluated before a blanket DROP.
+            local final_drop_rule_num=$("$ipt_cmd" -L "$chain" --line-numbers | grep -E "DROP\s+all\s+--\s+\S+\s+\S+" | awk '{print $1}' | head -n 1)
+            if [[ "$chain" == "INPUT" ]]; then # Only apply specific insert logic for INPUT chain
+                if [[ -n "$final_drop_rule_num" ]]; then
+                     "$ipt_cmd" -I "$chain" "$final_drop_rule_num" $rule_args_full
                 else
-                     "$ipt_cmd" -I "$chain" 1 $rule_args # Insert at the top or as first rule in user chain
+                     # If no final DROP, insert as the rule that allows CN IPs, then this one, then the default DROP policy takes effect
+                     # Find the rule that matches the cnipset
+                     local cn_ipset_rule_num=$("$ipt_cmd" -L "$chain" --line-numbers | grep -- "--match-set\s+\(cnipv4\|cnipv6\)\s+src\s+-j\s+ACCEPT" | awk '{print $1}' | tail -n 1)
+                     if [[ -n "$cn_ipset_rule_num" ]]; then
+                        local insert_pos=$((cn_ipset_rule_num + 1))
+                        "$ipt_cmd" -I "$chain" "$insert_pos" $rule_args_full
+                     else
+                        # Fallback: insert at the top if no CN IPSET rule found either
+                        "$ipt_cmd" -I "$chain" 1 $rule_args_full
+                     fi
                 fi
+            else # For other chains, or if specific logic fails, insert at top
+                 "$ipt_cmd" -I "$chain" 1 $rule_args_full
             fi
         fi
     done
@@ -611,7 +732,8 @@ delete_allowed_port() {
     fi
 
     # 从配置文件中删除 (use temp file for safer sed)
-    sed "/^${port_input//\//\\/}$/d" "$ALLOWED_PORTS_CONF" > /tmp/allowed_ports.tmp && mv /tmp/allowed_ports.tmp "$ALLOWED_PORTS_CONF"
+    # Escape potential slashes in port_input if it ever contains them (though unlikely for ports)
+    sed "/^$(echo "$port_input" | sed 's/\//\\\//g')$/d" "$ALLOWED_PORTS_CONF" > /tmp/allowed_ports.tmp && mv /tmp/allowed_ports.tmp "$ALLOWED_PORTS_CONF"
 
 
     # 从防火墙规则中删除
@@ -674,12 +796,15 @@ check_service_status() {
 verify_firewall_status() {
     local type="$1" # ipv4 or ipv6
     local ipt_cmd="iptables"
-    local ipset_name="cnipv4"
+    local ipset_name="cnipv4" # Default to IPv4 ipset name
 
     if [[ "$type" == "ipv6" ]]; then
-        if ! command -v ip6tables &>/dev/null; then return; fi
+        if ! command -v ip6tables &>/dev/null; then
+             echo -e "${YELLOW}ip6tables 命令未找到，无法验证IPv6防火墙状态。${NC}"
+             return
+        fi
         ipt_cmd="ip6tables"
-        ipset_name="cnipv6"
+        ipset_name="cnipv6" # IPv6 ipset name
     fi
 
     echo -e "${BLUE}--- 验证 $type 防火墙状态 ---${NC}"
@@ -700,17 +825,11 @@ verify_firewall_status() {
     fi
 
     # Check default policy or final DROP rule
-    # Get the policy of the INPUT chain
     input_policy=$($ipt_cmd -L INPUT -n | head -n 1 | awk '{print $4}' | tr -d '()')
     if [[ "$input_policy" == "DROP" ]]; then
         echo -e "${GREEN}  策略: INPUT 链默认策略为 DROP - 存在${NC}"
-    elif "$ipt_cmd" -S INPUT | awk '{print $NF}' | grep -q "DROP"; then # Check if last rule is a general DROP
-         # More robust check for a final DROP rule (might not be the *very* last due to logging etc.)
-         if "$ipt_cmd" -S INPUT | grep -E -- "-j\s+DROP$" &>/dev/null ; then
-            echo -e "${GREEN}  规则: INPUT 链包含 DROP 规则 - 存在${NC}"
-         else
-            echo -e "${RED}  策略/规则: INPUT 链缺少默认 DROP 策略或明确的末尾 DROP 规则! 所有流量可能被允许或由其他规则处理。${NC}"
-         fi
+    elif "$ipt_cmd" -S INPUT | grep -E -- "-j\s+DROP$" &>/dev/null ; then # Check for any rule ending in -j DROP
+        echo -e "${GREEN}  规则: INPUT 链包含 DROP 规则 - 存在${NC}"
     else
         echo -e "${RED}  策略/规则: INPUT 链缺少默认 DROP 策略或明确的末尾 DROP 规则! 所有流量可能被允许或由其他规则处理。${NC}"
     fi
@@ -760,20 +879,20 @@ verify_port_open_status() {
 
     local listening_found=false
     if command -v ss &>/dev/null; then
-        if ss -tulnp | grep -qE "(:${port_to_check}|:${port_input})\s"; then # Check for single or full range if simple
+        if ss -tulnp | grep -qE "(:${port_to_check}[[:space:]]|:${port_input}[[:space:]])"; then # Check for single or full range if simple
             listening_found=true
             echo -e "${GREEN}检测到服务正在监听端口 $port_to_check (或范围内的起始端口):${NC}"
-            ss -tulnp | grep -E "(:${port_to_check}|:${port_input})\s"
+            ss -tulnp | grep -E "(:${port_to_check}[[:space:]]|:${port_input}[[:space:]])"
         fi
          if [[ "$port_input" == *":"* && "$listening_found" == "false" ]]; then # If range and specific not found, show all
             echo -e "${BLUE}当前所有TCP/UDP监听端口 (供参考，因为正在检查范围 $port_input):${NC}"
             ss -tulnp
         fi
     elif command -v netstat &>/dev/null; then
-        if netstat -tulnp | grep -qE "(:${port_to_check}|:${port_input})\s"; then
+        if netstat -tulnp | grep -qE "(:${port_to_check}[[:space:]]|:${port_input}[[:space:]])"; then
             listening_found=true
             echo -e "${GREEN}检测到服务正在监听端口 $port_to_check (或范围内的起始端口):${NC}"
-            netstat -tulnp | grep -E "(:${port_to_check}|:${port_input})\s"
+            netstat -tulnp | grep -E "(:${port_to_check}[[:space:]]|:${port_input}[[:space:]])"
         fi
         if [[ "$port_input" == *":"* && "$listening_found" == "false" ]]; then
             echo -e "${BLUE}当前所有TCP/UDP监听端口 (供参考，因为正在检查范围 $port_input):${NC}"
@@ -797,7 +916,7 @@ verify_port_open_status() {
 show_menu() {
     clear
     echo -e "${BLUE}=================================================${NC}"
-    echo -e "${GREEN}      中国IP入站控制工具 - 交互式菜单 (v2.1 - Wrapper)${NC}"
+    echo -e "${GREEN}      中国IP入站控制工具 - 交互式菜单 (v2.2 - Wrapper Fix)${NC}"
     echo -e "${BLUE}=================================================${NC}"
     echo -e "${YELLOW}  --- 安装与配置 ---${NC}"
     echo -e "  ${YELLOW}1.${NC} 安装IPv4仅国内入站规则"
