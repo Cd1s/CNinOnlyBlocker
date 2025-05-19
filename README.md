@@ -40,22 +40,6 @@ CNinOnlyBlocker 是一个专为服务器用户设计的防火墙增强工具，�
 curl -O https://raw.githubusercontent.com/Cd1s/CNinOnlyBlocker/refs/heads/main/allow-cn-inbound.sh && chmod +x allow-cn-inbound.sh && sudo ./allow-cn-inbound.sh
 ```
 
-### 手动安装步骤
-
-1. 下载脚本
-```bash
-wget -O cninonly_blocker.sh https://raw.githubusercontent.com/Cd1s/CNinOnlyBlocker/main/cninonly_blocker.sh
-```
-
-2. 赋予执行权限
-```bash
-chmod +x cninonly_blocker.sh
-```
-
-3. 以 root 权限运行
-```bash
-sudo ./cninonly_blocker.sh
-```
 
 ### 功能菜单
 
