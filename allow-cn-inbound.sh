@@ -110,16 +110,28 @@ create_startup_script() {
 #!/bin/bash
 
 # CNinOnlyBlocker 开机启动脚本
+echo "正在启动 CNinOnlyBlocker 防火墙规则..." > /var/log/cninonly_blocker.log
+
+# 确保目录和端口文件存在
+if [ ! -f /etc/cninonly_blocker/allowed_ports.txt ]; then
+    echo "22" > /etc/cninonly_blocker/allowed_ports.txt
+    echo "创建默认端口文件..." >> /var/log/cninonly_blocker.log
+fi
 
 # IPv4 配置
 if [ -f /etc/cninonly_blocker/ipv4_enabled ]; then
+    echo "应用 IPv4 规则..." >> /var/log/cninonly_blocker.log
     # 创建 ipset
     ipset create $IPV4_IPSET_NAME hash:net family inet hashsize 1024 maxelem 65536 -exist
     
     # 加载中国 IP 列表
-    for ip in \$(cat /etc/cninonly_blocker/cn_ipv4.zone); do
-        ipset add $IPV4_IPSET_NAME \$ip -exist
-    done
+    if [ -f /etc/cninonly_blocker/cn_ipv4.zone ]; then
+        for ip in \$(cat /etc/cninonly_blocker/cn_ipv4.zone); do
+            ipset add $IPV4_IPSET_NAME \$ip -exist
+        done
+    else
+        echo "警告: IPv4 区域文件不存在" >> /var/log/cninonly_blocker.log
+    fi
     
     # 配置 iptables 规则
     iptables -F INPUT
@@ -127,31 +139,52 @@ if [ -f /etc/cninonly_blocker/ipv4_enabled ]; then
     iptables -A INPUT -i lo -j ACCEPT
     
     # 允许特定端口
+    echo "添加 IPv4 端口规则..." >> /var/log/cninonly_blocker.log
     while read port; do
         if [[ \$port == *-* ]]; then
             IFS='-' read -r start_port end_port <<< "\$port"
             iptables -A INPUT -p tcp --match multiport --dports \$start_port:\$end_port -j ACCEPT
             iptables -A INPUT -p udp --match multiport --dports \$start_port:\$end_port -j ACCEPT
+            echo "添加 IPv4 端口范围: \$start_port-\$end_port" >> /var/log/cninonly_blocker.log
         else
             iptables -A INPUT -p tcp --dport \$port -j ACCEPT
             iptables -A INPUT -p udp --dport \$port -j ACCEPT
+            echo "添加 IPv4 端口: \$port" >> /var/log/cninonly_blocker.log
         fi
     done < /etc/cninonly_blocker/allowed_ports.txt
     
     # 仅允许中国 IP 访问
     iptables -A INPUT -m set --match-set $IPV4_IPSET_NAME src -j ACCEPT
     iptables -A INPUT -j DROP
+    
+    # 保存 iptables 规则
+    if command -v iptables-save &> /dev/null; then
+        if command -v netfilter-persistent &> /dev/null; then
+            netfilter-persistent save
+        elif [ -d "/etc/iptables" ]; then
+            iptables-save > /etc/iptables/rules.v4
+        else
+            iptables-save > "/etc/cninonly_blocker/iptables.rules"
+        fi
+    fi
+    
+    echo "IPv4 规则应用完成" >> /var/log/cninonly_blocker.log
 fi
 
 # IPv6 配置
 if [ -f /etc/cninonly_blocker/ipv6_enabled ]; then
+    echo "应用 IPv6 规则..." >> /var/log/cninonly_blocker.log
     # 创建 ipset
     ipset create $IPV6_IPSET_NAME hash:net family inet6 hashsize 1024 maxelem 65536 -exist
     
     # 加载中国 IP 列表
-    for ip in \$(cat /etc/cninonly_blocker/cn_ipv6.zone); do
-        ipset add $IPV6_IPSET_NAME \$ip -exist
-    done
+    if [ -f /etc/cninonly_blocker/cn_ipv6.zone ]; then
+        for ip in \$(cat /etc/cninonly_blocker/cn_ipv6.zone); do
+            ipset add $IPV6_IPSET_NAME \$ip -exist
+        done
+    else
+        echo "警告: IPv6 区域文件不存在" >> /var/log/cninonly_blocker.log
+    fi
     
     # 配置 ip6tables 规则
     ip6tables -F INPUT
@@ -159,21 +192,45 @@ if [ -f /etc/cninonly_blocker/ipv6_enabled ]; then
     ip6tables -A INPUT -i lo -j ACCEPT
     
     # 允许特定端口
+    echo "添加 IPv6 端口规则..." >> /var/log/cninonly_blocker.log
     while read port; do
         if [[ \$port == *-* ]]; then
             IFS='-' read -r start_port end_port <<< "\$port"
             ip6tables -A INPUT -p tcp --match multiport --dports \$start_port:\$end_port -j ACCEPT
             ip6tables -A INPUT -p udp --match multiport --dports \$start_port:\$end_port -j ACCEPT
+            echo "添加 IPv6 端口范围: \$start_port-\$end_port" >> /var/log/cninonly_blocker.log
         else
             ip6tables -A INPUT -p tcp --dport \$port -j ACCEPT
             ip6tables -A INPUT -p udp --dport \$port -j ACCEPT
+            echo "添加 IPv6 端口: \$port" >> /var/log/cninonly_blocker.log
         fi
     done < /etc/cninonly_blocker/allowed_ports.txt
     
     # 仅允许中国 IP 访问
     ip6tables -A INPUT -m set --match-set $IPV6_IPSET_NAME src -j ACCEPT
     ip6tables -A INPUT -j DROP
+    
+    # 保存 ip6tables 规则
+    if command -v ip6tables-save &> /dev/null; then
+        if command -v netfilter-persistent &> /dev/null; then
+            netfilter-persistent save
+        elif [ -d "/etc/iptables" ]; then
+            ip6tables-save > /etc/iptables/rules.v6
+        else
+            ip6tables-save > "/etc/cninonly_blocker/ip6tables.rules"
+        fi
+    fi
+    
+    echo "IPv6 规则应用完成" >> /var/log/cninonly_blocker.log
 fi
+
+# 确保规则持久化到各种支持的系统
+if command -v netfilter-persistent &> /dev/null; then
+    echo "使用 netfilter-persistent 保存规则" >> /var/log/cninonly_blocker.log
+    netfilter-persistent save
+fi
+
+exit 0
 EOL
     
     chmod +x "$STARTUP_SCRIPT"
@@ -182,15 +239,23 @@ EOL
     cat > "$SERVICE_FILE" << EOL
 [Unit]
 Description=CNinOnlyBlocker Service
-After=network.target
+After=network.target network-online.target
+Wants=network-online.target
 
 [Service]
 Type=oneshot
 ExecStart=$STARTUP_SCRIPT
 RemainAfterExit=true
+TimeoutSec=180
 
 [Install]
 WantedBy=multi-user.target
+EOL
+    
+    # 创建定时任务确保规则被加载
+    mkdir -p /etc/cron.d/
+    cat > /etc/cron.d/cninonly_blocker << EOL
+@reboot root $STARTUP_SCRIPT
 EOL
     
     systemctl daemon-reload
@@ -315,6 +380,12 @@ install_ipv6_only_cn() {
         fi
     fi
     
+    # 手动运行一次启动脚本确保规则被正确应用
+    if [ -f "$STARTUP_SCRIPT" ]; then
+        $STARTUP_SCRIPT
+        echo -e "${BLUE}已运行启动脚本以确保规则生效${NC}"
+    fi
+    
     echo -e "${GREEN}✅ IPv6 仅中国入站已安装${NC}"
     return 0
 }
@@ -402,6 +473,20 @@ add_allowed_port() {
         fi
     fi
     
+    # 保存规则
+    if [ -f "$CONFIG_DIR/ipv4_enabled" ] || [ -f "$CONFIG_DIR/ipv6_enabled" ]; then
+        if command -v netfilter-persistent &> /dev/null; then
+            netfilter-persistent save
+            echo -e "${BLUE}防火墙规则已保存${NC}"
+        fi
+        
+        # 更新启动脚本
+        if [ -f "$STARTUP_SCRIPT" ]; then
+            echo -e "${BLUE}运行启动脚本以确保规则正确应用${NC}"
+            $STARTUP_SCRIPT
+        fi
+    fi
+    
     return 0
 }
 
@@ -444,6 +529,20 @@ delete_allowed_port() {
         else
             ip6tables -D INPUT -p tcp --dport $port_input -j ACCEPT
             ip6tables -D INPUT -p udp --dport $port_input -j ACCEPT
+        fi
+    fi
+    
+    # 保存规则
+    if [ -f "$CONFIG_DIR/ipv4_enabled" ] || [ -f "$CONFIG_DIR/ipv6_enabled" ]; then
+        if command -v netfilter-persistent &> /dev/null; then
+            netfilter-persistent save
+            echo -e "${BLUE}防火墙规则已保存${NC}"
+        fi
+        
+        # 更新启动脚本
+        if [ -f "$STARTUP_SCRIPT" ]; then
+            echo -e "${BLUE}运行启动脚本以确保规则正确应用${NC}"
+            $STARTUP_SCRIPT
         fi
     fi
     
