@@ -372,13 +372,16 @@ setup_systemd_service() {
 [Unit]
 Description=Restore ipset and iptables rules
 Before=network-pre.target
-After=local-fs.target
+After=local-fs.target network.target
 
 [Service]
 Type=oneshot
+ExecStartPre=/bin/sleep 2
+ExecStart=/bin/bash -c "modprobe ip6_tables || true"
+ExecStart=/bin/bash -c "modprobe ip6table_filter || true"
 ExecStart=/bin/bash -c "ipset restore < /etc/ipset/ipset_v4.conf || true"
-ExecStart=/bin/bash -c "ipset restore < /etc/ipset/ipset_v6.conf || true"
 ExecStart=/bin/bash -c "iptables-restore < /etc/iptables/rules.v4 || true"
+ExecStart=/bin/bash -c "ipset restore < /etc/ipset/ipset_v6.conf || true" 
 ExecStart=/bin/bash -c "ip6tables-restore < /etc/iptables/rules.v6 || true"
 RemainAfterExit=yes
 
@@ -392,9 +395,15 @@ EOF
         rc-update)
             cat > /etc/local.d/ipset-restore.start <<EOF
 #!/bin/sh
+# 确保必要的内核模块已加载
+modprobe ip6_tables || true
+modprobe ip6table_filter || true
+# 先恢复IPv4规则
 ipset restore < /etc/ipset/ipset_v4.conf || true
-ipset restore < /etc/ipset/ipset_v6.conf || true
 iptables-restore < /etc/iptables/rules.v4 || true
+# 等待一下再恢复IPv6规则
+sleep 2
+ipset restore < /etc/ipset/ipset_v6.conf || true
 ip6tables-restore < /etc/iptables/rules.v6 || true
 EOF
             chmod +x /etc/local.d/ipset-restore.start
