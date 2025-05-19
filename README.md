@@ -27,9 +27,7 @@
 ## 🚀 使用方法
 
 ```bash
-curl -O https://raw.githubusercontent.com/Cd1s/CNinOnlyBlocker/refs/heads/main/allow-cn-inbound-interactive.sh
-chmod +x allow-cn-inbound-interactive.sh
-sudo ./allow-cn-inbound-interactive.sh
+curl -O https://raw.githubusercontent.com/Cd1s/CNinOnlyBlocker/refs/heads/main/allow-cn-inbound.sh && chmod +x allow-cn-inbound.sh && sudo ./allow-cn-inbound.sh
 ```
 
 运行后可进入交互菜单，支持：
