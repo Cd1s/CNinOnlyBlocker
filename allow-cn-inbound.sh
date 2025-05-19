@@ -18,6 +18,7 @@ IPTABLES_RULES_V4="/etc/iptables/rules.v4"
 IP6TABLES_RULES_V6="/etc/iptables/rules.v6"
 SYSTEMD_SERVICE_NAME="ipset-restore.service"
 SYSTEMD_SERVICE_FILE="/etc/systemd/system/$SYSTEMD_SERVICE_NAME"
+WRAPPER_SCRIPT_PATH="/usr/local/sbin/cnblocker-restore-rules.sh" # 包装脚本路径
 
 # --- Helper Functions ---
 
@@ -145,7 +146,7 @@ check_dependencies() {
 check_firewall_conflicts() {
     echo -e "${BLUE}检查防火墙冲突...${NC}"
     local conflicting_firewalls=""
-    if systemctl is-active --quiet firewalld; then
+    if command -v systemctl &>/dev/null && systemctl is-active --quiet firewalld; then
         conflicting_firewalls+="firewalld "
     fi
     if command -v ufw &>/dev/null && ufw status | grep -q "Status: active"; then
@@ -237,7 +238,7 @@ configure_ipv4_firewall() {
     # Add allowed ports (re-read from config)
     if [ -f "$ALLOWED_PORTS_CONF" ]; then
         while IFS= read -r port_entry; do
-            apply_port_rule "iptables" "$port_entry" "ACCEPT" "INPUT" # Use new function
+            apply_port_rule "iptables" "$port_entry" "ACCEPT" "INPUT" "I" # Use new function
         done < "$ALLOWED_PORTS_CONF"
     fi
 
@@ -279,7 +280,7 @@ configure_ipv6_firewall() {
 
     if [ -f "$ALLOWED_PORTS_CONF" ]; then
         while IFS= read -r port_entry; do
-             apply_port_rule "ip6tables" "$port_entry" "ACCEPT" "INPUT" # Use new function
+             apply_port_rule "ip6tables" "$port_entry" "ACCEPT" "INPUT" "I" # Use new function
         done < "$ALLOWED_PORTS_CONF"
     fi
 
@@ -294,49 +295,147 @@ configure_ipv6_firewall() {
     verify_firewall_status "ipv6"
 }
 
-# 函数：设置systemd服务 (for persistence)
+# 函数：设置systemd服务 (for persistence) - 使用包装脚本
 setup_systemd_service() {
     if ! command -v systemctl &>/dev/null; then
         echo -e "${YELLOW}systemctl 命令未找到。无法设置 systemd 服务进行规则持久化。${NC}"
-        echo -e "${YELLOW}请确保您的系统使用其他方式持久化 iptables 和 ipset 规则 (如 netfilter-persistent, iptables-services)。${NC}"
+        echo -e "${YELLOW}请确保您的系统使用其他方式持久化 iptables 和 ipset 规则。${NC}"
         return 1
     fi
 
-    echo -e "${BLUE}🛠️ 设置 systemd 自动还原服务 ($SYSTEMD_SERVICE_NAME)...${NC}"
+    echo -e "${BLUE}🛠️ 检查并设置 systemd 自动还原服务 ($SYSTEMD_SERVICE_NAME) 使用包装脚本...${NC}"
 
-    # Create the service file content
-    cat > "$SYSTEMD_SERVICE_FILE" <<EOF
+    # 检查冲突服务 (例如 Debian/Ubuntu 上的 netfilter-persistent)
+    if systemctl list-unit-files | grep -q "netfilter-persistent.service"; then
+        if systemctl is-active --quiet netfilter-persistent.service || systemctl is-enabled --quiet netfilter-persistent.service; then
+            echo -e "${YELLOW}检测到 'netfilter-persistent.service' 可能处于活动或启用状态。${NC}"
+            echo -e "${YELLOW}此服务也用于持久化iptables规则，可能与自定义的 '$SYSTEMD_SERVICE_NAME' 冲突。${NC}"
+            read -p "是否要禁用 'netfilter-persistent.service' 以使用 '$SYSTEMD_SERVICE_NAME' (推荐)? (y/N): " disable_native
+            if [[ "$disable_native" == "y" || "$disable_native" == "Y" ]]; then
+                echo -e "${BLUE}正在禁用 netfilter-persistent.service...${NC}"
+                systemctl stop netfilter-persistent.service &>/dev/null
+                systemctl disable netfilter-persistent.service &>/dev/null
+                echo -e "${GREEN}netfilter-persistent.service 已禁用。${NC}"
+            else
+                echo -e "${YELLOW}保留 'netfilter-persistent.service'。'$SYSTEMD_SERVICE_NAME' 可能无法按预期工作或产生冲突。${NC}"
+            fi
+        fi
+    fi
+    # 检查 RHEL 系列系统的冲突 (例如 iptables.service 或 ipset.service)
+    if systemctl list-unit-files | grep -q "iptables.service" || systemctl list-unit-files | grep -q "ipset.service"; then
+        if systemctl is-active --quiet iptables.service || systemctl is-enabled --quiet iptables.service || \
+           systemctl is-active --quiet ipset.service || systemctl is-enabled --quiet ipset.service; then
+            echo -e "${YELLOW}检测到 'iptables.service' 或 'ipset.service' (常见于 RHEL/CentOS) 可能处于活动或启用状态。${NC}"
+            echo -e "${YELLOW}这些服务也用于持久化规则，可能与自定义的 '$SYSTEMD_SERVICE_NAME' 冲突。${NC}"
+            read -p "是否要禁用这些服务以使用 '$SYSTEMD_SERVICE_NAME' (推荐)? (y/N): " disable_native_rhel
+            if [[ "$disable_native_rhel" == "y" || "$disable_native_rhel" == "Y" ]]; then
+                echo -e "${BLUE}正在禁用 iptables.service 和 ipset.service...${NC}"
+                systemctl stop iptables.service ipset.service &>/dev/null
+                systemctl disable iptables.service ipset.service &>/dev/null
+                echo -e "${GREEN}iptables.service 和 ipset.service 已禁用。${NC}"
+            else
+                echo -e "${YELLOW}保留原生服务。'$SYSTEMD_SERVICE_NAME' 可能无法按预期工作或产生冲突。${NC}"
+            fi
+        fi
+    fi
+
+    echo -e "${BLUE}创建包装脚本: $WRAPPER_SCRIPT_PATH ${NC}"
+    # 创建包装脚本内容
+    cat > "$WRAPPER_SCRIPT_PATH" <<EOF_WRAPPER
+#!/bin/sh
+# CNBlocker Rule Restore Wrapper Script
+# This script is called by $SYSTEMD_SERVICE_NAME
+
+# Exit immediately if a command exits with a non-zero status.
+set -e
+
+log_message() {
+    echo "CNBlocker Wrapper: \$1" >&2 # Log to stderr, systemd will capture to journal
+}
+
+log_message "开始恢复规则..."
+
+# IPv4 规则恢复 (关键)
+if [ ! -f "$IPSET_V4_CONF" ]; then
+    log_message "错误: IPv4 ipset 配置文件 $IPSET_V4_CONF 未找到!"
+    exit 1
+fi
+log_message "正在从 $IPSET_V4_CONF 恢复 IPv4 ipset..."
+/usr/sbin/ipset restore -f "$IPSET_V4_CONF"
+
+if [ ! -f "$IPTABLES_RULES_V4" ]; then
+    log_message "错误: IPv4 iptables 规则文件 $IPTABLES_RULES_V4 未找到!"
+    exit 1
+fi
+log_message "正在从 $IPTABLES_RULES_V4 恢复 IPv4 iptables 规则..."
+/usr/sbin/iptables-restore -n "$IPTABLES_RULES_V4"
+
+# IPv6 规则恢复 (可选)
+if [ -f "$IPSET_V6_CONF" ]; then
+    log_message "正在从 $IPSET_V6_CONF 恢复 IPv6 ipset..."
+    /usr/sbin/ipset restore -f "$IPSET_V6_CONF" || log_message "警告: IPv6 ipset 恢复失败 (文件: $IPSET_V6_CONF)，继续..."
+else
+    log_message "信息: IPv6 ipset 配置文件 $IPSET_V6_CONF 未找到，跳过。"
+fi
+
+if [ -f "$IP6TABLES_RULES_V6" ]; then
+    log_message "正在从 $IP6TABLES_RULES_V6 恢复 IPv6 iptables 规则..."
+    /usr/sbin/ip6tables-restore -n "$IP6TABLES_RULES_V6" || log_message "警告: IPv6 iptables 规则恢复失败 (文件: $IP6TABLES_RULES_V6)，继续..."
+else
+    log_message "信息: IPv6 iptables 规则文件 $IP6TABLES_RULES_V6 未找到，跳过。"
+fi
+
+log_message "规则恢复成功完成。"
+exit 0
+EOF_WRAPPER
+
+    # 设置包装脚本为可执行
+    chmod +x "$WRAPPER_SCRIPT_PATH"
+
+    echo -e "${BLUE}创建 systemd 服务文件: $SYSTEMD_SERVICE_FILE ${NC}"
+    # 创建 systemd 服务文件内容
+    cat > "$SYSTEMD_SERVICE_FILE" <<EOF_SYSTEMD
 [Unit]
-Description=Restore ipset and iptables rules for CN Blocker
-AssertPathExists=/etc/ipset/ipset_v4.conf
-AssertPathExists=/etc/iptables/rules.v4
-# We don't AssertPathExists for v6 files, as v6 setup might be optional or fail
-Before=network-pre.target
-Wants=network-pre.target
+Description=CNBlocker ipset/iptables restore service (via wrapper)
+Documentation=man:ipset(8) man:iptables-restore(8) man:ip6tables-restore(8)
+DefaultDependencies=no
 After=local-fs.target
+Before=network.target sysinit.target shutdown.target
 
 [Service]
 Type=oneshot
 RemainAfterExit=yes
-# Use /usr/sbin/ipset and /usr/sbin/iptables-restore for potentially more standard paths
-ExecStart=/usr/sbin/ipset restore -f $IPSET_V4_CONF
-ExecStart=/usr/sbin/iptables-restore -n $IPTABLES_RULES_V4
-ExecStart=/bin/sh -c "[ -f $IPSET_V6_CONF ] && /usr/sbin/ipset restore -f $IPSET_V6_CONF || true"
-ExecStart=/bin/sh -c "[ -f $IP6TABLES_RULES_V6 ] && /usr/sbin/ip6tables-restore -n $IP6TABLES_RULES_V6 || true"
+StandardOutput=journal
+StandardError=journal
+Environment=PATH=/usr/sbin:/usr/bin:/sbin:/bin
+ExecStart=$WRAPPER_SCRIPT_PATH
 
 [Install]
-WantedBy=multi-user.target
-EOF
+WantedBy=network.target
+EOF_SYSTEMD
 
     systemctl daemon-reload
-    systemctl enable "$SYSTEMD_SERVICE_NAME"
-    if systemctl is-enabled --quiet "$SYSTEMD_SERVICE_NAME"; then
-        echo -e "${GREEN}systemd服务 ($SYSTEMD_SERVICE_NAME) 配置并启用成功。${NC}"
-        echo -e "${BLUE}尝试启动服务以应用规则...${NC}"
-        systemctl restart "$SYSTEMD_SERVICE_NAME" # Restart to apply immediately if files exist
-        check_service_status # Check status after enabling
+    echo -e "${BLUE}尝试启用并启动 $SYSTEMD_SERVICE_NAME 服务...${NC}"
+    systemctl disable "$SYSTEMD_SERVICE_NAME" &>/dev/null # 确保旧配置被移除
+    if systemctl enable "$SYSTEMD_SERVICE_NAME"; then
+        echo -e "${GREEN}$SYSTEMD_SERVICE_NAME 服务已成功链接用于开机启动。${NC}"
     else
-        echo -e "${RED}systemd服务 ($SYSTEMD_SERVICE_NAME) 启用失败。规则可能在重启后不会恢复。${NC}"
+        echo -e "${RED}$SYSTEMD_SERVICE_NAME 服务链接失败。请检查 systemd 的错误。${NC}"
+        return 1 # 如果启用失败则退出
+    fi
+
+    if systemctl restart "$SYSTEMD_SERVICE_NAME"; then
+        echo -e "${GREEN}$SYSTEMD_SERVICE_NAME 服务已(重新)启动。${NC}"
+    else
+        echo -e "${RED}$SYSTEMD_SERVICE_NAME 服务启动失败。请检查日志详情:${NC}"
+        echo -e "${RED}  sudo systemctl status $SYSTEMD_SERVICE_NAME ${NC}"
+        echo -e "${RED}  sudo journalctl -xeu $SYSTEMD_SERVICE_NAME ${NC}"
+    fi
+
+    if command -v check_service_status &>/dev/null; then
+      check_service_status
+    else
+      systemctl status "$SYSTEMD_SERVICE_NAME" --no-pager
     fi
 }
 
@@ -380,6 +479,7 @@ uninstall_all() {
         systemctl stop "$SYSTEMD_SERVICE_NAME" 2>/dev/null
         systemctl disable "$SYSTEMD_SERVICE_NAME" 2>/dev/null
         rm -f "$SYSTEMD_SERVICE_FILE"
+        rm -f "$WRAPPER_SCRIPT_PATH" # 移除包装脚本
         systemctl daemon-reload
         systemctl reset-failed # Clear any failed state for the service
     fi
@@ -421,7 +521,15 @@ apply_port_rule() {
                     "$ipt_cmd" -D "$chain" $rule_args
                 fi
             else # For -I (Insert)
-                "$ipt_cmd" -I "$chain" $rule_args
+                # Insert rule at the position just before the final DROP rule for INPUT chain
+                # If no explicit DROP rule, insert at the top (default behavior of -I).
+                # This example inserts before generic DROP. More specific placement might be needed.
+                local final_drop_rule_num=$("$ipt_cmd" -L "$chain" --line-numbers | grep -E "DROP\s+all\s+--\s+\anywhere\s+\anywhere" | awk '{print $1}' | head -n 1)
+                if [[ -n "$final_drop_rule_num" && "$chain" == "INPUT" ]]; then
+                     "$ipt_cmd" -I "$chain" "$final_drop_rule_num" $rule_args
+                else
+                     "$ipt_cmd" -I "$chain" 1 $rule_args # Insert at the top or as first rule in user chain
+                fi
             fi
         fi
     done
@@ -503,7 +611,7 @@ delete_allowed_port() {
     fi
 
     # 从配置文件中删除 (use temp file for safer sed)
-    sed "/^${port_input}$/d" "$ALLOWED_PORTS_CONF" > /tmp/allowed_ports.tmp && mv /tmp/allowed_ports.tmp "$ALLOWED_PORTS_CONF"
+    sed "/^${port_input//\//\\/}$/d" "$ALLOWED_PORTS_CONF" > /tmp/allowed_ports.tmp && mv /tmp/allowed_ports.tmp "$ALLOWED_PORTS_CONF"
 
 
     # 从防火墙规则中删除
@@ -552,7 +660,7 @@ check_service_status() {
         echo -e "${GREEN}$SYSTEMD_SERVICE_NAME 服务正在运行 (active)。${NC}"
     else
         echo -e "${YELLOW}$SYSTEMD_SERVICE_NAME 服务未运行 (inactive/failed)。${NC}"
-        systemctl status "$SYSTEMD_SERVICE_NAME" --no-pager | grep -E "(Loaded|Active|Main PID|Status|CGroup)"
+        systemctl status "$SYSTEMD_SERVICE_NAME" --no-pager | grep -E "(Loaded|Active|Main PID|Status|CGroup|Process)"
     fi
 
     if systemctl is-enabled --quiet "$SYSTEMD_SERVICE_NAME"; then
@@ -577,7 +685,7 @@ verify_firewall_status() {
     echo -e "${BLUE}--- 验证 $type 防火墙状态 ---${NC}"
     # Check ipset
     if ipset list "$ipset_name" &>/dev/null; then
-        local set_entries=$(ipset list "$ipset_name" | grep -c '^[0-9]') # Count members
+        local set_entries=$(ipset list "$ipset_name" | grep -cE '^[0-9a-fA-F.:/]+') # Count members, more robust for v6
         echo -e "${GREEN}IPSET ($ipset_name): 存在, 包含 $set_entries 条目。${NC}"
     else
         echo -e "${RED}IPSET ($ipset_name): 未找到或未激活!${NC}"
@@ -590,13 +698,23 @@ verify_firewall_status() {
     else
         echo -e "${RED}  规则: 允许来自 $ipset_name 的流量 - 未找到!${NC}"
     fi
-    if "$ipt_cmd" -L INPUT -n -v | grep -q "policy DROP"; then
-         echo -e "${GREEN}  策略: INPUT 链默认策略为 DROP - 存在${NC}"
-    elif "$ipt_cmd" -S INPUT | grep -q -- "-j DROP"; then
-         echo -e "${GREEN}  规则: INPUT 链末尾有 DROP 规则 - 存在${NC}"
+
+    # Check default policy or final DROP rule
+    # Get the policy of the INPUT chain
+    input_policy=$($ipt_cmd -L INPUT -n | head -n 1 | awk '{print $4}' | tr -d '()')
+    if [[ "$input_policy" == "DROP" ]]; then
+        echo -e "${GREEN}  策略: INPUT 链默认策略为 DROP - 存在${NC}"
+    elif "$ipt_cmd" -S INPUT | awk '{print $NF}' | grep -q "DROP"; then # Check if last rule is a general DROP
+         # More robust check for a final DROP rule (might not be the *very* last due to logging etc.)
+         if "$ipt_cmd" -S INPUT | grep -E -- "-j\s+DROP$" &>/dev/null ; then
+            echo -e "${GREEN}  规则: INPUT 链包含 DROP 规则 - 存在${NC}"
+         else
+            echo -e "${RED}  策略/规则: INPUT 链缺少默认 DROP 策略或明确的末尾 DROP 规则! 所有流量可能被允许或由其他规则处理。${NC}"
+         fi
     else
-        echo -e "${RED}  策略/规则: INPUT 链缺少默认 DROP 策略或末尾 DROP 规则! 所有流量可能被允许或由其他规则处理。${NC}"
+        echo -e "${RED}  策略/规则: INPUT 链缺少默认 DROP 策略或明确的末尾 DROP 规则! 所有流量可能被允许或由其他规则处理。${NC}"
     fi
+
 
     # Check allowed ports from config
     if [ -f "$ALLOWED_PORTS_CONF" ]; then
@@ -634,12 +752,7 @@ verify_port_open_status() {
 
     local port_to_check
     if [[ "$port_input" == *":"* ]]; then
-        # For ranges, we might just check the start of the range or specific well-known ports within it
-        # Or inform the user that range checking is broad
         echo -e "${YELLOW}对于端口范围 $port_input, 将尝试检查范围内的部分端口。${NC}"
-        # Simple approach: check first port in range if it's a common scenario.
-        # For a full check, one would iterate or use more complex ss/netstat filters.
-        # For simplicity, we'll just list listening ports and user can verify.
         port_to_check=$(echo "$port_input" | cut -d: -f1) # Check first port of range as an example
     else
         port_to_check="$port_input"
@@ -647,26 +760,23 @@ verify_port_open_status() {
 
     local listening_found=false
     if command -v ss &>/dev/null; then
-        # Using ss for modern systems
-        if ss -tulnp | grep -q ":$port_to_check\s"; then
+        if ss -tulnp | grep -qE "(:${port_to_check}|:${port_input})\s"; then # Check for single or full range if simple
             listening_found=true
             echo -e "${GREEN}检测到服务正在监听端口 $port_to_check (或范围内的起始端口):${NC}"
-            ss -tulnp | grep ":$port_to_check\s"
+            ss -tulnp | grep -E "(:${port_to_check}|:${port_input})\s"
         fi
-         # General listening ports for context if checking a range
-        if [[ "$port_input" == *":"* ]]; then
-            echo -e "${BLUE}当前所有TCP/UDP监听端口 (供参考):${NC}"
+         if [[ "$port_input" == *":"* && "$listening_found" == "false" ]]; then # If range and specific not found, show all
+            echo -e "${BLUE}当前所有TCP/UDP监听端口 (供参考，因为正在检查范围 $port_input):${NC}"
             ss -tulnp
         fi
     elif command -v netstat &>/dev/null; then
-        # Using netstat for older systems
-        if netstat -tulnp | grep -q ":$port_to_check\s"; then
+        if netstat -tulnp | grep -qE "(:${port_to_check}|:${port_input})\s"; then
             listening_found=true
             echo -e "${GREEN}检测到服务正在监听端口 $port_to_check (或范围内的起始端口):${NC}"
-            netstat -tulnp | grep ":$port_to_check\s"
+            netstat -tulnp | grep -E "(:${port_to_check}|:${port_input})\s"
         fi
-        if [[ "$port_input" == *":"* ]]; then
-            echo -e "${BLUE}当前所有TCP/UDP监听端口 (供参考):${NC}"
+        if [[ "$port_input" == *":"* && "$listening_found" == "false" ]]; then
+            echo -e "${BLUE}当前所有TCP/UDP监听端口 (供参考，因为正在检查范围 $port_input):${NC}"
             netstat -tulnp
         fi
     else
@@ -687,12 +797,12 @@ verify_port_open_status() {
 show_menu() {
     clear
     echo -e "${BLUE}=================================================${NC}"
-    echo -e "${GREEN}       中国IP入站控制工具 - 交互式菜单 (v2.0)${NC}"
+    echo -e "${GREEN}      中国IP入站控制工具 - 交互式菜单 (v2.1 - Wrapper)${NC}"
     echo -e "${BLUE}=================================================${NC}"
     echo -e "${YELLOW}  --- 安装与配置 ---${NC}"
     echo -e "  ${YELLOW}1.${NC} 安装IPv4仅国内入站规则"
     echo -e "  ${YELLOW}2.${NC} 安装IPv6仅国内入站规则 (如果系统支持)"
-    echo -e "  ${YELLOW}3.${NC} (重新)设置规则持久化服务 (Systemd)"
+    echo -e "  ${YELLOW}3.${NC} (重新)设置规则持久化服务 (Systemd - 使用包装脚本)"
     echo -e "${YELLOW}  --- 端口管理 ---${NC}"
     echo -e "  ${YELLOW}4.${NC} 查看已放行端口/范围"
     echo -e "  ${YELLOW}5.${NC} 添加放行端口/范围"
@@ -704,7 +814,7 @@ show_menu() {
     echo -e "${YELLOW}  --- 卸载 ---${NC}"
     echo -e "  ${YELLOW}10.${NC} 卸载IPv4规则"
     echo -e "  ${YELLOW}11.${NC} 卸载IPv6规则"
-    echo -e "  ${YELLOW}12.${NC} 完全卸载 (移除所有规则和服务)"
+    echo -e "  ${YELLOW}12.${NC} 完全卸载 (移除所有规则、服务和包装脚本)"
     echo -e "${YELLOW}  --- 其他 ---${NC}"
     echo -e "  ${YELLOW}0.${NC} 退出"
     echo -e "${BLUE}=================================================${NC}"
@@ -724,7 +834,6 @@ while true; do
             check_firewall_conflicts # Check for ufw, firewalld
             if download_cn_ipv4_list; then
                 configure_ipv4_firewall
-                # setup_systemd_service # Systemd setup is now separate or part of initial full setup
                 echo -e "${GREEN}✅ IPv4配置完成：所有非中国IP的入站连接已封禁 (IPv4)，出站不限制。${NC}"
                 echo -e "${YELLOW}建议运行选项 '3' 来设置或确认规则持久化服务。${NC}"
             else
@@ -742,7 +851,6 @@ while true; do
             fi
             if download_cn_ipv6_list; then
                 configure_ipv6_firewall
-                # setup_systemd_service
                 echo -e "${GREEN}✅ IPv6配置完成：所有非中国IP的入站连接已封禁 (IPv6)，出站不限制。${NC}"
                 echo -e "${YELLOW}建议运行选项 '3' 来设置或确认规则持久化服务。${NC}"
             else
