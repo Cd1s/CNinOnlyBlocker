@@ -1,8 +1,8 @@
-# 🛡️ CNinOnlyBlocker 交互增强版
+# 🛡️ CNinOnlyBlocker 交互增强版 2.0
 
-🚫 拒绝所有非中国 IP 入站连接｜✅ 仅允许中国 IP 入站｜🌐 支持 IPv4 + IPv6｜🎯 自定义放行端口
+🚫 拒绝所有非中国 IP 入站连接｜✅ 仅允许中国 IP 入站｜🌐 支持 IPv4 + IPv6｜🎯 支持端口范围放行｜🔍 智能系统适配
 
-这是一个增强版的交互式一键脚本，专为服务器用户设计，基于 `ipset` + `iptables` + `ip6tables`，实现**仅允许中国大陆 IP 地址访问服务器入站服务**，同时允许自定义端口放行，支持 IPv6 策略控制，**不限制出站连接**，并支持**开机自动恢复配置**。
+这是一个全面增强的交互式一键脚本，专为服务器用户设计，基于 `ipset` + `iptables` + `ip6tables`，实现**仅允许中国大陆 IP 地址访问服务器入站服务**，同时允许自定义端口放行（支持单端口、多端口、端口范围），支持IPv6策略控制，**不限制出站连接**，并支持**开机自动恢复配置**。
 
 ---
 
@@ -10,11 +10,16 @@
 
 - ✅ **仅允许中国 IP 入站连接（IPv4 / IPv6）**
 - ❌ **拒绝所有非中国 IP 入站连接**
-- 🎛️ **支持自定义放行端口（国内外都可访问）**
-- 🌐 **支持 IPv6 入站限制（可选）**
-- ⚡ 使用 `ipset` 实现高速匹配，大规模 IP 过滤无压力
+- 🎛️ **支持灵活端口放行（支持格式: 80,443,8000-9000）**
+- 🌐 **自动检测并支持 IPv6 入站限制（仅在系统支持时启用）**
+- ⚙️ **自动适配多种Linux系统**（Debian/Ubuntu, CentOS/RHEL, Alpine）
+- 🔍 **智能检测防火墙冲突**（ufw, firewalld, nftables）并提供处理方案
+- ⚡ **性能优化**，使用高效批量添加与哈希表优化
+- 🔬 **验证防火墙规则**功能，确保规则正确应用
+- 📊 **检查服务状态**，监控防火墙服务运行情况
+- 🧪 **测试端口监听状态**，验证服务可用性
 - 💾 自动保存防火墙规则
-- 🔁 开机自动还原规则（基于 `systemd` 服务）
+- 🔁 开机自动还原规则（基于系统服务管理器）
 - 🧹 一键卸载，恢复原始防火墙状态
 
 ---
@@ -22,9 +27,9 @@
 ## 🚀 使用方法
 
 ```bash
-curl -O https://raw.githubusercontent.com/Cd1s/CNinOnlyBlocker/refs/heads/main/allow-cn-inbound.sh
-chmod +x allow-cn-inbound.sh
-sudo ./allow-cn-inbound.sh
+curl -O https://raw.githubusercontent.com/Cd1s/CNinOnlyBlocker/refs/heads/main/allow-cn-inbound-interactive.sh
+chmod +x allow-cn-inbound-interactive.sh
+sudo ./allow-cn-inbound-interactive.sh
 ```
 
 运行后可进入交互菜单，支持：
@@ -32,13 +37,53 @@ sudo ./allow-cn-inbound.sh
 ```
 1. 安装 IPv4 仅中国入站
 2. 安装 IPv6 仅中国入站
-3. 查看已放行端口
-4. 添加放行端口（支持 TCP / UDP）
+3. 查看放行端口
+4. 添加放行端口（支持端口范围）
 5. 删除放行端口
-6. 卸载 IPv4 规则
-7. 卸载 IPv6 规则
-8. 完全卸载并清除所有规则
+6. 删除 IPv4 仅国内入站
+7. 删除 IPv6 仅国内入站
+8. 删除并卸载，放行全部端口
+9. 验证防火墙规则
+10. 检查服务状态
+11. 测试放行端口是否监听
+0. 退出
 ```
+
+---
+
+## 🌟 新增功能说明
+
+### 多系统支持
+自动检测并适配不同的Linux发行版，支持：
+- Debian/Ubuntu（使用apt包管理器）
+- CentOS/RHEL/Fedora（使用yum包管理器）
+- Alpine Linux（使用apk包管理器）
+
+### 防火墙冲突检测
+启动时自动检测是否存在可能冲突的防火墙服务：
+- UFW
+- Firewalld
+- NFTables
+提供三种处理方案：自动禁用、手动处理或继续安装
+
+### IPv6自动检测
+只在系统实际支持并启用IPv6时才提供IPv6防护功能，避免无谓配置
+
+### 灵活端口放行
+支持复杂的端口放行格式：
+- 单个端口：`80`
+- 多个端口：`80,443,8080`
+- 端口范围：`8000-9000`
+- 混合格式：`80,443,8000-9000,1234`
+
+### 防火墙规则验证
+提供功能查看当前应用的防火墙规则状态，确保规则被正确应用
+
+### 服务状态监控
+检查防火墙规则恢复服务是否正常运行，确保系统重启后规则能自动恢复
+
+### 端口监听测试
+检测放行的端口是否有服务在监听，便于排查服务可用性问题
 
 ---
 
@@ -48,12 +93,6 @@ sudo ./allow-cn-inbound.sh
 
 ```
 8. 删除并卸载，放行全部端口
-```
-
-或执行：
-
-```bash
-sudo ./allow-cn-inbound.sh uninstall
 ```
 
 ---
@@ -68,12 +107,16 @@ sudo ./allow-cn-inbound.sh uninstall
 | IPv6 ip6tables | `/etc/iptables/rules.v6` |
 | 放行端口列表 | `/etc/cnblocker/allowed_ports.conf` |
 | systemd 服务 | `/etc/systemd/system/ipset-restore.service` |
+| Alpine 启动脚本 | `/etc/local.d/ipset-restore.start` |
 
 ---
 
 ## 🔧 系统要求
 
-- Linux 系统（建议 Debian / Ubuntu）
+- 支持的Linux发行版：
+  - Debian/Ubuntu 系列
+  - CentOS/RHEL/Fedora 系列
+  - Alpine Linux
 - Root 权限
 - 自动安装以下依赖：
   - `ipset`、`iptables`、`ip6tables`、`curl`、`wget`
@@ -86,22 +129,28 @@ sudo ./allow-cn-inbound.sh uninstall
 > A：不会。此脚本**仅限制入站连接**，**出站流量不受影响**。
 
 > **Q：可以只配置 IPv4 或 IPv6 吗？**  
-> A：可以，分别在菜单中选择即可。
+> A：可以，分别在菜单中选择即可。如果系统不支持IPv6，脚本会自动跳过IPv6配置。
 
 > **Q：放行端口能保留吗？**  
 > A：能，脚本会自动记录并在下次运行中重新应用。
 
-> **Q：数据源可以更换吗？**  
-> A：可以，在脚本内修改 `wget` 或 `curl` 的下载地址即可。
+> **Q：如果有其他防火墙软件会冲突吗？**  
+> A：脚本会自动检测常见的防火墙软件（ufw、firewalld、nftables）并提供处理方案。
+
+> **Q：如何确认防火墙规则已经生效？**  
+> A：可以使用菜单项 "9. 验证防火墙规则" 查看当前应用的规则。
+
+> **Q：为什么端口监听测试显示无法访问，但实际可以访问？**  
+> A：端口监听测试只检查本机是否有服务在监听该端口，与防火墙放行无关。如果端口已放行但没有服务监听，会显示无法访问。
 
 ---
 
-## 🌐 数据源说明（已更新）
+## 🌐 数据源说明
 
 **IPv4 主源：**  
 `https://www.ipdeny.com/ipblocks/data/aggregated/cn-aggregated.zone`
 
-**IPv6 主源（已更新为）：**  
+**IPv6 主源：**  
 `https://www.ipdeny.com/ipv6/ipaddresses/blocks/cn.zone`
 
 **备用源（IPv4/IPv6）：**  
@@ -109,4 +158,4 @@ sudo ./allow-cn-inbound.sh uninstall
 
 ---
 
-如需进一步定制或有其他需求，欢迎提出！
+如需进一步定制或有其他需求，欢迎提出！ 
