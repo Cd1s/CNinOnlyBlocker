@@ -15,11 +15,11 @@
 - ⚙️ **自动适配多种Linux系统**（Debian/Ubuntu, CentOS/RHEL, Alpine）
 - 🔍 **智能检测防火墙冲突**（ufw, firewalld, nftables）并提供处理方案
 - ⚡ **性能优化**，使用高效批量添加与哈希表优化
-- 🔬 **验证防火墙规则**功能，确保规则正确应用
+- �� **验证防火墙规则**功能，确保规则被正确应用并提供自动修复
 - 📊 **检查服务状态**，监控防火墙服务运行情况
 - 🧪 **测试端口监听状态**，验证服务可用性
 - 💾 自动保存防火墙规则
-- 🔁 开机自动还原规则（基于系统服务管理器）
+- 🔁 **多重保障**开机自动还原规则（使用多种启动机制确保可靠恢复）
 - 🧹 一键卸载，恢复原始防火墙状态
 
 ---
@@ -64,8 +64,18 @@ curl -O https://raw.githubusercontent.com/Cd1s/CNinOnlyBlocker/refs/heads/main/a
 - NFTables
 提供三种处理方案：自动禁用、手动处理或继续安装
 
-### IPv6自动检测
-只在系统实际支持并启用IPv6时才提供IPv6防护功能，避免无谓配置
+### 多重启动保障
+采用多种机制确保IPv6规则在系统重启后可靠生效：
+- 独立的IPv4和IPv6系统服务
+- 带延迟的IPv6规则加载策略
+- cron启动任务作为备份机制
+- 传统init.d脚本支持
+- 自动检测和修复机制
+
+### IPv6自动检测与修复
+- 只在系统实际支持并启用IPv6时才提供IPv6防护功能
+- 验证功能可自动检测并修复未加载的IPv6规则
+- 系统启动后自动监测IPv6规则状态
 
 ### 灵活端口放行
 支持复杂的端口放行格式：
@@ -74,8 +84,8 @@ curl -O https://raw.githubusercontent.com/Cd1s/CNinOnlyBlocker/refs/heads/main/a
 - 端口范围：`8000-9000`
 - 混合格式：`80,443,8000-9000,1234`
 
-### 防火墙规则验证
-提供功能查看当前应用的防火墙规则状态，确保规则被正确应用
+### 防火墙规则验证与修复
+提供功能查看当前应用的防火墙规则状态，并在发现问题时自动尝试修复
 
 ### 服务状态监控
 检查防火墙规则恢复服务是否正常运行，确保系统重启后规则能自动恢复
@@ -104,8 +114,13 @@ curl -O https://raw.githubusercontent.com/Cd1s/CNinOnlyBlocker/refs/heads/main/a
 | IPv4 iptables | `/etc/iptables/rules.v4` |
 | IPv6 ip6tables | `/etc/iptables/rules.v6` |
 | 放行端口列表 | `/etc/cnblocker/allowed_ports.conf` |
-| systemd 服务 | `/etc/systemd/system/ipset-restore.service` |
-| Alpine 启动脚本 | `/etc/local.d/ipset-restore.start` |
+| IPv4服务 | `/etc/systemd/system/ipset-restore-ipv4.service` |
+| IPv6服务 | `/etc/systemd/system/ipset-restore-ipv6.service` |
+| IPv6重启任务 | `/etc/cron.d/restore-ipv6-rules` |
+| IPv6备份脚本 | `/etc/init.d/restore-ipv6-rules` |
+| Alpine IPv4启动脚本 | `/etc/local.d/ipset-restore-ipv4.start` |
+| Alpine IPv6启动脚本 | `/etc/local.d/ipset-restore-ipv6.start` |
+| Alpine IPv6监控脚本 | `/etc/local.d/check-ipv6-rules.start` |
 
 ---
 
@@ -136,7 +151,10 @@ curl -O https://raw.githubusercontent.com/Cd1s/CNinOnlyBlocker/refs/heads/main/a
 > A：脚本会自动检测常见的防火墙软件（ufw、firewalld、nftables）并提供处理方案。
 
 > **Q：如何确认防火墙规则已经生效？**  
-> A：可以使用菜单项 "9. 验证防火墙规则" 查看当前应用的规则。
+> A：可以使用菜单项 "9. 验证防火墙规则" 查看当前应用的规则。如发现IPv6规则未加载，该功能会自动尝试修复。
+
+> **Q：重启后IPv6规则不生效怎么办？**  
+> A：2.0版本采用了多重保障机制，包括专用IPv6服务、延迟加载、cron任务和自动修复功能，大幅提高了IPv6规则在重启后的可靠性。如仍有问题，可使用"9. 验证防火墙规则"进行手动修复。
 
 > **Q：为什么端口监听测试显示无法访问，但实际可以访问？**  
 > A：端口监听测试只检查本机是否有服务在监听该端口，与防火墙放行无关。如果端口已放行但没有服务监听，会显示无法访问。
