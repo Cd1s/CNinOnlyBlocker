@@ -340,30 +340,25 @@ setup_systemd_service() {
     fi
 
     echo -e "${BLUE}创建包装脚本: $WRAPPER_SCRIPT_PATH ${NC}"
-    # 创建包装脚本内容 (已修正，会先销毁已存在的同名ipset)
+    # 创建包装脚本内容 (v2.3: 移除了包装脚本内部的 pre-emptive ipset destroy)
     cat > "$WRAPPER_SCRIPT_PATH" <<EOF_WRAPPER
 #!/bin/sh
 # CNBlocker Rule Restore Wrapper Script
 # This script is called by $SYSTEMD_SERVICE_NAME
+# v2.3: This version directly attempts ipset restore without pre-emptive destroy.
+# This may cause the service to fail if ipsets already exist in memory.
 
 # Ensure commands are found
 export PATH=/usr/sbin:/sbin:/usr/bin:/bin
 
-# Define ipset names (these should match what configure_firewall functions use)
-# 主脚本中 configure_ipv4_firewall 使用 "cnipv4"
-# 主脚本中 configure_ipv6_firewall 使用 "cnipv6"
-IPSET_NAME_V4="cnipv4"
-IPSET_NAME_V6="cnipv6"
-
 log_message() {
     # Echo to stdout, systemd journal will capture it with timestamp
-    # \$1: level (INFO, ERROR, WARNING), \$2...: message
     local level="\$1"
     shift
     echo "CNBlocker Wrapper: [\$level] \$*"
 }
 
-log_message "INFO" "Starting CNBlocker rule restoration process..."
+log_message "INFO" "Starting CNBlocker rule restoration process (v2.3 - no pre-destroy)..."
 
 # --- Restore IPv4 rules (Critical) ---
 # Enable exit on error for this critical part
@@ -376,27 +371,14 @@ if [ ! -f "$IPSET_V4_CONF" ]; then
     exit 1
 fi
 
-# Check if the ipset set already exists and destroy it to prevent "set already exists" error
-# Need to use \$IPSET_NAME_V4 so it's interpreted by the wrapper script's shell
-if ipset list -n "\$IPSET_NAME_V4" > /dev/null 2>&1; then
-    log_message "INFO" "IPv4 ipset '\$IPSET_NAME_V4' already exists in memory. Destroying it before restore."
-    if ipset destroy "\$IPSET_NAME_V4"; then
-        log_message "INFO" "Successfully destroyed existing IPv4 ipset '\$IPSET_NAME_V4'."
-    else
-        # This might happen if the set is in use or other issues.
-        # ipset restore might still fail.
-        log_message "WARNING" "Failed to destroy existing IPv4 ipset '\$IPSET_NAME_V4'. Restore might still fail."
-    fi
-else
-    log_message "INFO" "IPv4 ipset '\$IPSET_NAME_V4' does not exist in memory. Proceeding with restore to create it."
-fi
-
-log_message "INFO" "Restoring IPv4 ipset rules from '$IPSET_V4_CONF' for set '\$IPSET_NAME_V4'..."
+log_message "INFO" "Restoring IPv4 ipset rules from '$IPSET_V4_CONF'..."
+# Directly attempt restore. This will fail if the set defined in the conf file already exists.
 if ! /usr/sbin/ipset restore -f "$IPSET_V4_CONF"; then
-    log_message "ERROR" "Critical - Failed to restore IPv4 ipset rules for '\$IPSET_NAME_V4' from '$IPSET_V4_CONF'."
+    log_message "ERROR" "Critical - Failed to restore IPv4 ipset rules from '$IPSET_V4_CONF'."
+    log_message "ERROR" "This might be because the ipset (e.g., cnipv4) already exists in memory."
     exit 1
 fi
-log_message "INFO" "IPv4 ipset rules for '\$IPSET_NAME_V4' restored successfully."
+log_message "INFO" "IPv4 ipset rules restored successfully."
 
 log_message "INFO" "Processing IPv4 iptables rules..."
 if [ ! -f "$IPTABLES_RULES_V4" ]; then
@@ -422,31 +404,19 @@ if ! command -v ip6tables > /dev/null 2>&1; then
     log_message "INFO" "ip6tables command not found. Skipping all IPv6 restoration."
 else
     log_message "INFO" "Processing IPv6 ipset rules..."
-    # Check if IPv6 ipset configuration file exists
     if [ -f "$IPSET_V6_CONF" ]; then
         V6_RESTORATION_ATTEMPTED=true
-        # Check if the ipset set already exists and destroy it
-        if ipset list -n "\$IPSET_NAME_V6" > /dev/null 2>&1; then
-            log_message "INFO" "IPv6 ipset '\$IPSET_NAME_V6' already exists. Destroying it before restore."
-            if ipset destroy "\$IPSET_NAME_V6"; then
-                log_message "INFO" "Successfully destroyed existing IPv6 ipset '\$IPSET_NAME_V6'."
-            else
-                log_message "WARNING" "Failed to destroy existing IPv6 ipset '\$IPSET_NAME_V6'."
-            fi
-        else
-            log_message "INFO" "IPv6 ipset '\$IPSET_NAME_V6' does not exist. Proceeding with restore."
-        fi
-
-        log_message "INFO" "Restoring IPv6 ipset rules from '$IPSET_V6_CONF' for set '\$IPSET_NAME_V6'..."
+        log_message "INFO" "Restoring IPv6 ipset rules from '$IPSET_V6_CONF'..."
+        # Directly attempt restore for IPv6 ipset
         if /usr/sbin/ipset restore -f "$IPSET_V6_CONF"; then
-            log_message "INFO" "IPv6 ipset rules for '\$IPSET_NAME_V6' restored successfully."
+            log_message "INFO" "IPv6 ipset rules restored successfully."
         else
-            log_message "WARNING" "Failed to restore IPv6 ipset rules for '\$IPSET_NAME_V6' from '$IPSET_V6_CONF'. This is non-critical."
+            log_message "WARNING" "Failed to restore IPv6 ipset rules from '$IPSET_V6_CONF'. This is non-critical."
+            log_message "WARNING" "This might be because the ipset (e.g., cnipv6) already exists in memory."
             V6_RESTORATION_SUCCESSFUL=false
         fi
     else
-        # Only log if IPv6 ipset config was expected (e.g., if IPSET_V6_CONF was set)
-        if [ -n "$IPSET_V6_CONF" ]; then
+        if [ -n "$IPSET_V6_CONF" ]; then # Only log if file was expected
              log_message "INFO" "IPv6 ipset configuration file '$IPSET_V6_CONF' not found. Skipping IPv6 ipset restore."
         else
              log_message "INFO" "IPv6 ipset configuration not specified. Skipping IPv6 ipset restore."
@@ -454,7 +424,6 @@ else
     fi
 
     log_message "INFO" "Processing IPv6 ip6tables rules..."
-    # Check if IPv6 iptables rules file exists
     if [ -f "$IP6TABLES_RULES_V6" ]; then
         V6_RESTORATION_ATTEMPTED=true
         log_message "INFO" "Restoring IPv6 ip6tables rules from '$IP6TABLES_RULES_V6'..."
@@ -465,7 +434,7 @@ else
             V6_RESTORATION_SUCCESSFUL=false
         fi
     else
-        if [ -n "$IP6TABLES_RULES_V6" ]; then
+        if [ -n "$IP6TABLES_RULES_V6" ]; then # Only log if file was expected
             log_message "INFO" "IPv6 ip6tables rules file '$IP6TABLES_RULES_V6' not found. Skipping IPv6 ip6tables restore."
         else
             log_message "INFO" "IPv6 iptables rules not specified. Skipping IPv6 ip6tables restore."
@@ -547,6 +516,9 @@ uninstall_ipv4() {
     echo ":OUTPUT ACCEPT [0:0]" >> "$IPTABLES_RULES_V4"
     echo "COMMIT" >> "$IPTABLES_RULES_V4"
     # Clear ipset save file
+    # For ipset, an empty file or a file with just "restore" might be okay,
+    # or ensure it's truly empty or contains valid "destroy" commands if needed.
+    # For simplicity, just making it empty. `ipset restore` on an empty file is a no-op.
     echo "" > "$IPSET_V4_CONF"
 
     echo -e "${GREEN}✅ 已卸载：IPv4规则已清除，默认策略为 ACCEPT。配置文件已清空。${NC}"
@@ -916,7 +888,7 @@ verify_port_open_status() {
 show_menu() {
     clear
     echo -e "${BLUE}=================================================${NC}"
-    echo -e "${GREEN}      中国IP入站控制工具 - 交互式菜单 (v2.2 - Wrapper Fix)${NC}"
+    echo -e "${GREEN}      中国IP入站控制工具 - 交互式菜单 (v2.3 - No Pre-Destroy Wrapper)${NC}"
     echo -e "${BLUE}=================================================${NC}"
     echo -e "${YELLOW}  --- 安装与配置 ---${NC}"
     echo -e "  ${YELLOW}1.${NC} 安装IPv4仅国内入站规则"
