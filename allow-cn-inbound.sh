@@ -53,12 +53,16 @@ check_root() {
 
 # 函数：检查IPv6支持
 check_ipv6_support() {
-    if [ -f /proc/net/if_inet6 ]; then
-        if ip -6 route show | grep -q "default"; then
-            return 0
-        fi
-    fi
+    # 强制返回false，禁用IPv6支持
     return 1
+    
+    # 原始代码注释掉但保留，以便将来需要时可以恢复
+    # if [ -f /proc/net/if_inet6 ]; then
+    #     if ip -6 route show | grep -q "default"; then
+    #         return 0
+    #     fi
+    # fi
+    # return 1
 }
 
 # 函数：检查防火墙冲突
