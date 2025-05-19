@@ -394,6 +394,18 @@ install_ipv6_only_cn() {
 view_allowed_ports() {
     echo -e "${BLUE}📋 当前放行端口列表:${NC}"
     
+    # 确保配置目录存在
+    if [ ! -d "$CONFIG_DIR" ]; then
+        mkdir -p "$CONFIG_DIR"
+        echo -e "${YELLOW}配置目录不存在，已创建: $CONFIG_DIR${NC}"
+    fi
+    
+    # 确保端口文件存在
+    if [ ! -f "$ALLOWED_PORTS_FILE" ]; then
+        echo "22" > "$ALLOWED_PORTS_FILE"
+        echo -e "${YELLOW}端口文件不存在，已创建默认配置${NC}"
+    fi
+    
     if [ -f "$ALLOWED_PORTS_FILE" ]; then
         cat "$ALLOWED_PORTS_FILE" | while read port; do
             if [[ $port == *-* ]]; then
@@ -410,6 +422,19 @@ view_allowed_ports() {
 # 添加放行端口
 add_allowed_port() {
     echo -e "${BLUE}➕ 添加放行端口${NC}"
+    
+    # 确保配置目录存在
+    if [ ! -d "$CONFIG_DIR" ]; then
+        mkdir -p "$CONFIG_DIR"
+        echo -e "${YELLOW}配置目录不存在，已创建: $CONFIG_DIR${NC}"
+    fi
+    
+    # 确保端口文件存在
+    if [ ! -f "$ALLOWED_PORTS_FILE" ]; then
+        echo "22" > "$ALLOWED_PORTS_FILE"
+        echo -e "${YELLOW}端口文件不存在，已创建默认配置${NC}"
+    fi
+    
     echo -e "请输入要放行的端口(支持单个端口如 80 或端口范围如 8000-9000):"
     read port_input
     
@@ -440,7 +465,7 @@ add_allowed_port() {
     fi
     
     # 检查是否已存在
-    if grep -q "^$port_input$" "$ALLOWED_PORTS_FILE"; then
+    if grep -q "^$port_input$" "$ALLOWED_PORTS_FILE" 2>/dev/null; then
         echo -e "${YELLOW}端口 $port_input 已在放行列表中${NC}"
         return 0
     fi
@@ -493,13 +518,20 @@ add_allowed_port() {
 # 删除放行端口
 delete_allowed_port() {
     echo -e "${BLUE}➖ 删除放行端口${NC}"
+    
+    # 确保配置目录和文件存在
+    if [ ! -d "$CONFIG_DIR" ] || [ ! -f "$ALLOWED_PORTS_FILE" ]; then
+        echo -e "${RED}错误: 放行端口配置文件不存在${NC}"
+        return 1
+    fi
+    
     view_allowed_ports
     
     echo -e "请输入要删除的端口号:"
     read port_input
     
     # 检查端口是否存在
-    if ! grep -q "^$port_input$" "$ALLOWED_PORTS_FILE"; then
+    if ! grep -q "^$port_input$" "$ALLOWED_PORTS_FILE" 2>/dev/null; then
         echo -e "${RED}端口 $port_input 不在放行列表中${NC}"
         return 1
     fi
@@ -712,6 +744,16 @@ show_menu() {
 
 # 主函数
 main() {
+    # 确保基本目录结构存在
+    if [ ! -d "$CONFIG_DIR" ]; then
+        mkdir -p "$CONFIG_DIR"
+    fi
+    
+    # 确保端口文件存在
+    if [ ! -f "$ALLOWED_PORTS_FILE" ]; then
+        echo "22" > "$ALLOWED_PORTS_FILE"
+    fi
+    
     check_root
     check_environment
     
