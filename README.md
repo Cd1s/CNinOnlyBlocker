@@ -40,6 +40,11 @@ CNinOnlyBlocker 是一个专为服务器用户设计的防火墙增强工具，�
 curl -O https://raw.githubusercontent.com/Cd1s/CNinOnlyBlocker/refs/heads/main/allow-cn-inbound.sh && chmod +x allow-cn-inbound.sh && sudo ./allow-cn-inbound.sh
 ```
 
+腾讯云版本
+```bash
+curl -O https://raw.githubusercontent.com/Cd1s/CNinOnlyBlocker/refs/heads/main/allow-cn-inbound-tx.sh && chmod +x allow-cn-inbound-tx.sh && sudo ./allow-cn-inbound-tx.sh
+```
+
 
 ### 功能菜单
 
