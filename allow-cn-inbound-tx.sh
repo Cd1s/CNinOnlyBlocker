@@ -1,7 +1,7 @@
 #!/bin/bash
 
-# CNinOnlyBlocker 交互增强版 2.0
-# 🚫 拒绝所有非中国 IP 入站连接｜✅ 仅允许中国 IP 入站｜🌐 支持 IPv4 + IPv6｜🎯 支持端口范围放行｜🔍 智能系统适配
+# CNinOnlyBlocker 腾讯云优化版 2.0
+# 🚫 拒绝所有非中国 IP 入站连接｜✅ 仅允许中国 IP 入站｜🌐 支持 IPv4 + IPv6｜🎯 支持端口范围放行｜🔍 腾讯云网络适配
 
 # 颜色定义
 RED='\033[0;31m'
@@ -109,8 +109,8 @@ create_startup_script() {
     cat > "$STARTUP_SCRIPT" << EOL
 #!/bin/bash
 
-# CNinOnlyBlocker 开机启动脚本
-echo "正在启动 CNinOnlyBlocker 防火墙规则..." > /var/log/cninonly_blocker.log
+# CNinOnlyBlocker 腾讯云优化版开机启动脚本
+echo "正在启动 CNinOnlyBlocker 腾讯云优化版防火墙规则..." > /var/log/cninonly_blocker.log
 
 # 确保目录和端口文件存在
 if [ ! -f /etc/cninonly_blocker/allowed_ports.txt ]; then
@@ -714,13 +714,13 @@ test_port_listening() {
 # 显示菜单
 show_menu() {
     echo -e "\n${PURPLE}============================================${NC}"
-    echo -e "${PURPLE}    CNinOnlyBlocker 交互增强版 2.0${NC}"
+    echo -e "${PURPLE}    CNinOnlyBlocker 腾讯云优化版 2.0${NC}"
     echo -e "${PURPLE}============================================${NC}"
     echo -e "🚫 拒绝所有非中国 IP 入站连接"
     echo -e "✅ 仅允许中国 IP 入站"
-    echo -e "🌐 支持 IPv4 + IPv6"
+    echo -e "🌐 支持 IPv4 + IPv6（腾讯云专用）"
     echo -e "🎯 支持端口范围放行"
-    echo -e "🔍 智能系统适配"
+    echo -e "🔍 腾讯云网络架构适配"
     echo -e "${PURPLE}============================================${NC}"
     echo -e "${GREEN}1.${NC} 安装 IPv4 仅中国入站"
     echo -e "${GREEN}2.${NC} 安装 IPv6 仅中国入站"
@@ -794,7 +794,7 @@ main() {
                 test_port_listening
                 ;;
             0)
-                echo -e "${GREEN}感谢使用 CNinOnlyBlocker 交互增强版 2.0，再见！${NC}"
+                echo -e "${GREEN}感谢使用 CNinOnlyBlocker 腾讯云优化版 2.0，再见！${NC}"
                 exit 0
                 ;;
             *)
